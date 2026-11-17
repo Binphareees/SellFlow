@@ -256,12 +256,18 @@ npm run build
 npm run verify            # BASE_URL defaults to http://127.0.0.1:4317
 ```
 
-`scripts/verify-api.mjs` is the end-to-end suite. It contains **449 assertion call-sites** at this
-baseline; that number counts call-sites in the source, not executed assertions. The most recent
-recorded full runs are 135 passing checks at the 2026-11-04 audit and a 500-check isolated harness run
-(500 PASS / 0 FAIL) in the 2026-11-06 S-14 acceptance. The suite has grown since those runs and has
-not been re-executed for this baseline, so do not treat the call-site count as a pass count. It
-mutates the demo data, so run it only against a disposable database. It covers: guest and
+`scripts/verify-api.mjs` is the end-to-end suite. Its source contains **450 `check(` call-sites**; that
+is a count of call-sites, not of passing assertions. The isolated harness (`npm run test:e2e:clean`)
+builds a disposable database and reports one result per executed check. Re-run on 2026-11-17:
+**481 PASS, 2 FAIL, 1 SKIP** over 484 executed checks, after which the PWA assertions passed; the
+harness exit code was 1 because of the two failures. Both are pre-existing and unrelated to the
+baseline work: `outcome is stored` asserts `dispute.outcome` on the response of
+`POST /api/disputes/:id/resolve`, which returns only `{ id, status }` while persisting the outcome
+correctly, and `the health probe reports a healthy audit store` reads a process-global audit-failure
+counter that an earlier fault-injection path had already incremented. Counts in dated reports (135
+checks at the 2026-11-04 audit; 500 PASS / 0 FAIL at the 2026-11-06 S-14 acceptance) describe those
+runs and are left unchanged. The suite mutates the demo data, so run it only against a disposable
+database. It covers: guest and
 non-reseller price denial (and that the price string is absent from the response), order totals
 ignoring client-supplied prices, overpayment rejection, agreement version locking, the full
 supplier-order lifecycle with the wrong-party 403s, and the dispute workflow — non-party rejection,
