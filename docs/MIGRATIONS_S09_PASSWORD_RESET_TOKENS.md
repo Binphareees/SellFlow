@@ -3,114 +3,107 @@
 Purpose: durable, single-use, hashed password-reset tokens for email-based password
 recovery (Stage 2 Task 9, audit finding S-09).
 
-**Status of this document:** rewritten on 2026-11-17 during the Part 1 closeout after the
-checksum discrepancy was resolved from a preserved copy of the applied migration. The
-earlier version of this note said the migration was "the file name Prisma generated
-during that run"; that was inaccurate in a more serious way than missing detail — the
-`PasswordResetToken` DDL was **appended to an already-applied migration**.
+**Status:** provenance problem **resolved forward-only on 2026-11-18** by
+`prisma/migrations/20261118000000_password_reset_token_alignment`. No historical
+migration or checksum was rewritten. This document keeps the full history.
 
-No migration file, database or schema was changed while establishing this.
-
-## 1. Where the model actually comes from
-
-`PasswordResetToken` lives in the **S-14 session-lifecycle migration directory**:
+## 1. Where the model comes from
 
 | Item | Value |
 |---|---|
-| Migration directory | `prisma/migrations/20261105060000_session_lifecycle/` |
-| Migration file | `prisma/migrations/20261105060000_session_lifecycle/migration.sql` |
-| Current file SHA-256 | `33b41fc743d7eca67b4ecd40465ca23f7f4103aacc9bb0e08bc3c7b3e7528b40` |
-| Checksum recorded in `_prisma_migrations` | `539bd5b67e16cbe1f814476e7024a0a7b1618088ff698fd9fc015aabf1f2a968` |
-| Table created | `PasswordResetToken` |
+| Migration directory | `prisma/migrations/20261105060000_session_lifecycle/` (historical) |
+| Correcting migration | `prisma/migrations/20261118000000_password_reset_token_alignment/` |
+| Table | `PasswordResetToken` |
+| Current schema authority | `prisma/schema.prisma` → `model PasswordResetToken` |
 
 There is **no** `password_reset_tokens` migration and no standalone S-09 migration.
+The S-09 DDL was originally appended to the already-applied S-14 migration.
 
 ## 2. Provenance timeline (evidence-based)
 
 | When | Event | Evidence |
 |---|---|---|
-| Migration authored | `20261105060000_session_lifecycle/migration.sql` contained **only** S-14 DDL (`Session.lastUsedAt` + `Session_userId_lastUsedAt_idx`). It did **not** contain `PasswordResetToken`. | The preserved copy at `prisma/disposable_scratch/clean_workspace/prisma/migrations/20261105060000_session_lifecycle_clean_s14/migration.sql` hashes to exactly the recorded `539bd5b6…`, and its `PasswordResetToken` section is **absent**. |
-| Applied | Row written to `_prisma_migrations` with checksum `539bd5b6…`, `finished_at` set, `applied_steps_count = 1`. | Live `dev.db`, read-only query. |
-| Duplicate applied | A byte-identical directory `…_clean_s14` was applied and failed: `duplicate column name: lastUsedAt`, 0 steps, `finished_at` NULL. | Its own log; both rows carry the same `539bd5b6…` checksum, proving the duplicate was a byte copy of the applied version. |
-| `2026-11-09 17:39` | The real migration file was **edited**: the S-09 comment, `CREATE TABLE "PasswordResetToken"` and its two indexes were appended (15 added lines, no other change). File hash became `33b41fc7…`. | `diff -u` between the preserved `539bd5b6…` copy and the current file shows exactly one added hunk (the S-09 block) and no deletions or modifications. File mtime. |
-| Since then | `prisma/dev.db` contains `PasswordResetToken`, but **not** with the DDL the current file produces: it has `id TEXT NOT NULL PRIMARY KEY` (no default), `used BOOLEAN NOT NULL DEFAULT false`, a **named** `CONSTRAINT "PasswordResetToken_userId_fkey" … ON UPDATE CASCADE`, and a **named** unique index `PasswordResetToken_hashedToken_unique`. | Live DDL, compared against a freshly migrated database (§4). |
-| 2026-11-17 | The failed duplicate row was marked rolled back after proof that it changed nothing. No migration SQL was touched. | Part 1 recovery evidence. |
+| Migration authored | `20261105060000_session_lifecycle/migration.sql` contained **only** S-14 DDL (`Session.lastUsedAt` + index). It did **not** contain `PasswordResetToken`. | Preserved copy at `prisma/disposable_scratch/clean_workspace/prisma/migrations/20261105060000_session_lifecycle_clean_s14/migration.sql` hashes to the recorded `539bd5b6…`, and has no `PasswordResetToken` section. |
+| Applied | Row written with checksum `539bd5b6…`, `finished_at` set, 1 step. | `_prisma_migrations`. |
+| Duplicate applied | Byte-identical `…_clean_s14` directory failed: `duplicate column name: lastUsedAt`, 0 steps. | Both rows carry the same `539bd5b6…` checksum. |
+| 2026-11-09 17:39 | Real file edited: S-09 comment, `CREATE TABLE "PasswordResetToken"` and two indexes appended (15 added lines, no other change) → `33b41fc7…`. | `diff -u` against the preserved copy shows one added hunk, zero deletions. |
+| Until 2026-11-18 | `prisma/dev.db` held the table in a **different** shape (named unique index, named FK `ON UPDATE CASCADE`, `BOOLEAN used`) — the shape a schema-sync path produces, not the shape the appended SQL produces. | DDL comparison, §4. |
+| 2026-11-17 | Failed duplicate row marked rolled back after proof it changed nothing. | Part 1 recovery evidence. |
+| 2026-11-18 | Forward-only alignment migration added and deployed. Migrations and datamodel now agree; `migrate diff` reports **"No difference detected."** | §5. |
 
-**Conclusion on the four questions**
+**Answers preserved for the record**
 
-1. *Was the file edited after application?* **Yes.** The applied bytes (`539bd5b6…`) had no
-   `PasswordResetToken` DDL; the current bytes (`33b41fc7…`) do.
-2. *Did the edit change schema semantics or only constraint naming?* **Semantics — it added
-   an entire table and two indexes.** It was not a cosmetic rename.
-3. *Was the existing development database created from the current file or a previous one?*
-   **Neither, for this table.** The migration row belongs to the previous version. The
-   table's DDL shape — named foreign key with `ON UPDATE CASCADE`, named unique index,
-   `BOOLEAN` column — is what Prisma's schema-sync path (`db push`) generates, not what the
-   hand-written migration SQL generates. The project's own
-   `STAGE2_TASK9_S09_INDEPENDENT_REVIEW_REPORT.md` recommended exactly this reading and
-   warned against relying on `db push` as the migration artifact (its §"recommendations").
-   Direct proof of the exact command used is not recorded in any report; this is a strong
-   inference from DDL shape plus the absent DDL in the applied version.
-4. *Do any other migrations have checksum inconsistencies?* **No.** All five other applied
-   migrations match their files byte-for-byte.
+1. Was the file edited after application? **Yes** — the applied bytes had no `PasswordResetToken` DDL.
+2. Semantics or naming? **Semantics** — a table and two indexes were added.
+3. Was the existing database created from the current file? **No**, for this table: the migration
+   row belongs to the previous version and the live DDL matched a schema-sync shape.
+4. Any other checksum inconsistency? **No** — the only mismatch is
+   `20261105060000_session_lifecycle` (historical, preserved deliberately) and its rolled-back
+   duplicate.
+5. Fresh vs existing database? Differed in exactly this one table; **identical since 2026-11-18**.
 
-## 3. Consequence for reproducibility
+## 3. The correction (forward-only)
 
-`prisma migrate deploy` on an empty database **does** create `PasswordResetToken`, because
-deploy executes the current file. This was verified in Part 1 (the disposable database
-contains the table, its indexes and all six columns).
+`20261118000000_password_reset_token_alignment/migration.sql` rebuilds the table into the
+datamodel shape. SQLite cannot drop an inline table-level `UNIQUE` constraint, so a
+create-new / copy / drop-old / rename rebuild is the only supported route. It is written to work
+from **all three** possible starting states:
 
-The hazard is the other direction: any database created **before** the 2026-11-09 edit and
-migrated with the old bytes has the S-14 schema but no `PasswordResetToken` table, and
-Prisma considers migrations up to date, so `migrate deploy` will never add it. Such a
-database only works if something else (a `db push`) created the table.
+1. table **missing** (a database migrated with the pre-2026-11-09 bytes),
+2. table with the **inline unnamed** `UNIQUE("hashedToken")` (fresh deployments before this fix),
+3. table **already canonical** (`prisma/dev.db`).
 
-## 4. Exact difference between a fresh deployment and `prisma/dev.db`
+All three were exercised on disposable databases before the real one was touched:
 
-Object counts: `prisma/dev.db` has 107 table/index objects, a freshly migrated database has
-106. Exactly one object differs:
+| Starting state | Result |
+|---|---|
+| Fresh, all migrations | deploy exit 0; 107 objects; parity diff **"No difference detected."** |
+| Copy of `prisma/dev.db` | deploy exit 0; **125/125 rows** preserved; integrity `ok`; 0 FK violations |
+| Legacy (table dropped) | deploy exit 0; table recreated empty with the named unique index; integrity `ok`; 0 FK violations |
+| Real `prisma/dev.db` | deploy exit 0; **125/125 rows**, all joined to a live `User`; 228 users unchanged; integrity `ok`; 0 FK violations; 107 objects; `migrate status` exit 0 |
 
-| Aspect | Fresh DB (from migrations) | `prisma/dev.db` |
-|---|---|---|
-| Unique enforcement | table-level `UNIQUE("hashedToken")` → implicit `sqlite_autoindex_PasswordResetToken_1` | separate `CREATE UNIQUE INDEX "PasswordResetToken_hashedToken_unique"` |
-| `id` column | `TEXT NOT NULL PRIMARY KEY DEFAULT "cuid()"` | `TEXT NOT NULL PRIMARY KEY` (no default) |
-| `used` column | `INTEGER NOT NULL DEFAULT 0` | `BOOLEAN NOT NULL DEFAULT false` |
-| Foreign key | inline `REFERENCES "User"("id") ON DELETE CASCADE` | named `CONSTRAINT "PasswordResetToken_userId_fkey" … ON DELETE CASCADE ON UPDATE CASCADE` |
-| Indexes | `PasswordResetToken_userId_idx`, `PasswordResetToken_expiresAt_idx` | same two, same names |
+## 4. Historical structural difference (now unified)
 
-All five other migration timestamps produce byte-identical DDL in both databases.
+| Aspect | Fresh DB before the fix | `prisma/dev.db` before the fix | Both after the fix |
+|---|---|---|---|
+| Unique | inline `UNIQUE("hashedToken")` → `sqlite_autoindex_PasswordResetToken_1` | named `PasswordResetToken_hashedToken_unique` | named `PasswordResetToken_hashedToken_unique` |
+| `id` | `TEXT NOT NULL PRIMARY KEY DEFAULT "cuid()"` | `TEXT NOT NULL PRIMARY KEY` | `TEXT NOT NULL PRIMARY KEY` |
+| `used` | `INTEGER NOT NULL DEFAULT 0` | `BOOLEAN NOT NULL DEFAULT false` | `BOOLEAN NOT NULL DEFAULT false` |
+| FK | inline `REFERENCES … ON DELETE CASCADE` | named `…_userId_fkey` + `ON UPDATE CASCADE` | named `…_userId_fkey` + `ON UPDATE CASCADE` |
+| Indexes | `…_userId_idx`, `…_expiresAt_idx` | same | same |
 
-**Classification:** a **migration provenance problem** that manifests as a **structurally
-different but functionally equivalent** schema. It is not a behavioral difference for the
-application (Prisma always supplies `id`; `User.id` is never updated; uniqueness and cascade
-delete are enforced in both). The two latent hazards are (a) the literal `DEFAULT "cuid()"`
-string in the migration SQL, which would collide if a row were ever inserted without an
-explicit `id` — the application never does this — and (b) a pre-2026-11-09 database that
-never received the table at all.
+The literal `DEFAULT "cuid()"` string in the old fresh-deployment SQL was a latent hazard (it would
+collide if a row were ever inserted without an explicit `id`; the application always supplies one).
+It is gone from the migration-produced schema.
 
-## 5. Recommended resolution (not implemented — owner approval required)
+## 5. Verification commands (reproducible)
 
-1. Create a **new** forward migration (do not edit `20261105060000_session_lifecycle` again)
-   that normalises the live database to the datamodel: replace the implicit/explicit unique
-   constraint naming so `prisma migrate diff --from-migrations … --to-schema-datamodel …` is
-   empty, and record the checksum mismatch as a known historical exception.
-2. Before that, decide which shape is canonical: Prisma-managed (`db push`-style, named
-   constraints) or hand-written migration SQL. The datamodel already uses
-   `@@unique(..., map: "PasswordResetToken_hashedToken_unique")`, so aligning the migration
-   SQL to that name is the smaller change.
-3. Re-verify with a fresh disposable database plus the isolated harness, and record the
-   `_prisma_migrations` checksum exception permanently in this document.
+```bash
+# parity: must print "No difference detected."
+npx prisma migrate diff --from-migrations prisma/migrations \
+  --to-schema-datamodel prisma/schema.prisma --shadow-database-url file:/tmp/shadow.db
 
-## 6. Security notes (unchanged)
+# existing database
+DATABASE_URL="file:$PWD/prisma/dev.db" npx prisma migrate status
+```
 
-- Reset tokens are stored only as a salted SHA-256 hash; the raw token is never persisted
-  or logged.
-- Token consumption, password update and session revocation occur in one interactive
-  transaction.
-- The reset-request response is identical whether or not an account exists.
+## 6. SQLite limitations encountered
+
+- An inline table-level `UNIQUE` constraint cannot be dropped with `ALTER TABLE`; only a table
+  rebuild changes it.
+- `PRAGMA foreign_keys` cannot be toggled inside a transaction, and Prisma wraps migrations in one,
+  so the migration uses `PRAGMA defer_foreign_keys = ON`. No other table references
+  `PasswordResetToken`, so the rebuild cannot violate a parent relationship.
+- DDL text formatting does not affect Prisma's comparison; object names and shapes do.
 
 ## 7. Known functional gaps (unchanged; Part 2 scope)
 
 - No `/reset-password` page exists, so the emailed reset link resolves to no route.
 - The reset-request endpoint applies no throttling.
 - `src/lib/auth/reset-token.test.ts` is not included in `vitest.config.ts`.
+
+## 8. Security notes (unchanged)
+
+- Reset tokens are stored only as a salted SHA-256 hash; the raw token is never persisted or logged.
+- Token consumption, password update and session revocation occur in one interactive transaction.
+- The reset-request response is identical whether or not an account exists.

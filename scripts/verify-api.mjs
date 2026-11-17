@@ -284,6 +284,22 @@ async function main() {
   const SEEDED_PRICE = 3_800_000; // ₦38,000 — body wave wig, prisma/seed.ts
   const NEW_PRICE = 4_100_000; // ₦41,000 — terms pushed by the test
 
+  // ── S-12: audit health must read healthy before anything mutates state ────
+  // `auditHealth()` counts every audit-write failure for the lifetime of the
+  // server process and never decreases. Several later checks deliberately force a
+  // failed audit write (S-14's durability probes and the dispute fail-closed
+  // tests), so this assertion is only deterministic on a freshly started server.
+  // It previously lived inside the S-14 block and failed whenever an earlier suite
+  // had already incremented the counter — an ordering artefact, not an S-12
+  // regression. Probing immediately after startup removes that dependency without
+  // weakening the assertion and without adding a production reset endpoint.
+  const healthAtStart = await call("/api/health");
+  check(
+    "the health probe reports a healthy audit store (S-12)",
+    healthAtStart.json?.audit?.status === "ok" && healthAtStart.json?.audit?.failures === 0,
+    `audit ${JSON.stringify(healthAtStart.json?.audit)}`,
+  );
+
   // ── S-12-only startup branch ──────────────────────────────────────────────
   // S-12 depends only on the HTTP helpers, the shared check() reporter, and an
   // isolated Prisma client for auditLog writes. It does not depend on seeded
@@ -3869,7 +3885,24 @@ async function main() {
     body: { outcome: "RESELLER_FAVOUR", note: "Supplier sends the missing two pieces.", status: "RESOLVED" },
   });
   check("mediator can record an outcome", resolved.status === 200, `status ${resolved.status}`);
-  check("outcome is stored", resolved.json?.dispute?.outcome === "RESELLER_FAVOUR");
+  check(
+    "the resolve response reports the new status",
+    resolved.json?.dispute?.status === "RESOLVED",
+    `status ${resolved.json?.dispute?.status}`,
+  );
+  // `POST /api/disputes/:id/resolve` returns only `{ id, status }` by design: the
+  // outcome is the authoritative record and is read back from the dispute detail
+  // (the same way the later outcome assertions verify persistence). Asserting
+  // `outcome` on the mutation response was testing a shape the endpoint never
+  // promised, so the check failed even though the outcome was stored correctly.
+  const resolvedDetail = await call(`/api/disputes/${newDispute.json?.dispute?.id}`, {
+    cookie: mediatorCookie,
+  });
+  check(
+    "outcome is stored",
+    resolvedDetail.json?.dispute?.outcome === "RESELLER_FAVOUR",
+    `outcome ${resolvedDetail.json?.dispute?.outcome}`,
+  );
 
   const detailAfter = await call(`/api/disputes/${newDispute.json?.dispute?.id}`, { cookie: resellerCookie });
   const trail = detailAfter.json?.dispute?.events ?? [];
@@ -4225,20 +4258,11 @@ async function main() {
     // audit-failure injection can restore the process-local S-12 counter
     // afterwards. We only do this in the isolated run, where s05Prisma (and
     // therefore the app's modules on disk) is available.
-    // The S-14 audit-durability probe below intentionally makes the server's
-    // in-process audit-failure counter dirty by forcing a real ROLE_GRANTED audit
-    // write to fail inside ensureRole / auditCritical. That counter lives in the
-    // server process, not in this script, so the script's own import of
-    // resetAuditHealth cannot reach it (it only resets this module clone). Rather
-    // than add a production reset endpoint or weaken the S-12 assertion, probe the
-    // health endpoint here — before any S-14 operation runs — so the S-12 "healthy
-    // audit store" check reads a clean counter from a fresh server process.
-    const healthBefore = await call("/api/health");
-    check(
-      "the health probe reports a healthy audit store (S-12)",
-      healthBefore.json?.audit?.status === "ok" && healthBefore.json?.audit?.failures === 0,
-      `audit ${JSON.stringify(healthBefore.json?.audit)}`,
-    );
+    // The S-12 audit-health assertion now runs at the top of main(), before any
+    // request mutates state. The S-14 durability probes below deliberately make a
+    // real ROLE_GRANTED audit write fail, which increments the server's
+    // process-global failure counter permanently; asserting a clean counter after
+    // that point could never be deterministic.
 
     const dayMs = 86_400_000;
     const s14Email = (tag) =>
