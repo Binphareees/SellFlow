@@ -1,0 +1,810 @@
+// SellFlow — V1 database schema
+//
+// Design rules encoded here:
+//  1. Single account -> one BusinessWorkspace, created automatically on registration.
+//  2. Marketplace roles are additive (ProfileRole), never exclusive of the workspace.
+//  3. Money is ALWAYS an integer in the smallest unit (kobo). No floats, no Decimals.
+//  4. No fintech surface: no gateway refs, no wallets, no bank verification fields.
+//     Payments are manual records with an optional free-text reference.
+//  5. Private reseller prices live on ResellerOfferVersion / ResellerAgreementVersion,
+//     never on the public listing, so they cannot leak through a public query.
+//  6. Agreements and offers are versioned; orders snapshot the version they were
+//     priced against, so later price changes can never rewrite history.
+//
+// Provider note: SQLite locally for zero setup. Enum-like columns are Strings,
+// validated at the API boundary (zod) and in src/lib/enums.ts. They map 1:1 to
+// Postgres enums when the project moves to a hosted database.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Identity, profiles, roles, verification
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique(map: "User_email_key")
+  passwordHash    String
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  isPlatformAdmin Boolean   @default(false)
+  disabledAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  profile  Profile?
+  sessions Session[]
+  resetTokens PasswordResetToken[]
+}
+
+model Profile {
+  id               String    @id @default(cuid())
+  userId           String    @unique
+  displayName      String
+  phone            String? // digits only, international format
+  city             String?
+  state            String?
+  country          String    @default("NG")
+  avatarUrl        String?
+  verificationTier Int       @default(0) // 0..3 — see VerificationTier
+  tierUpdatedAt    DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  roles              ProfileRole[]
+  verificationEvents VerificationEvent[]
+  ownedWorkspace     BusinessWorkspace?
+  supplierProfile    SupplierProfile?
+
+  resellerOrders     SupplierOrder[]        @relation("ResellerOrders")
+  resellerApplications ResellerApplication[] @relation("ResellerApplications")
+  resellerAgreements ResellerAgreement[]    @relation("ResellerAgreements")
+  negotiationProposals NegotiationProposal[]
+
+  @@index([verificationTier])
+}
+
+/// Additive roles on a single account: BUSINESS_OWNER is granted at registration,
+/// RESELLER / SUPPLIER / MEDIATOR are added as the account uses the marketplace.
+model ProfileRole {
+  id        String   @id @default(cuid())
+  profileId String
+  role      String
+  grantedAt DateTime @default(now())
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, role])
+  @@index([role])
+}
+
+/// Immutable trail of verification tier changes (0 = unverified .. 3 = fully verified).
+model VerificationEvent {
+  id                  String   @id @default(cuid())
+  profileId           String
+  fromTier            Int
+  toTier              Int
+  reason              String
+  evidenceRef         String?
+  reviewedByProfileId String?
+  createdAt           DateTime @default(now())
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, createdAt])
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  userAgent String?
+  ipHash    String?
+  /// Absolute deadline: set at creation and never extended by activity (S-14).
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  /// Last time this session was used. Drives idle expiry and is refreshed at
+  /// most once every five minutes (S-14).
+  lastUsedAt DateTime @default(now())
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, lastUsedAt])
+  @@index([expiresAt])
+}
+
+/// Durable sign-in throttle state (S-05). One row per account identity and one
+/// per source IP; keys are salted hashes, never raw emails or addresses.
+/// Rows are pruned by age and capped, so failed attempts cannot grow the table
+/// without bound.
+model LoginThrottle {
+  id              String    @id @default(cuid())
+  scope           String // ACCOUNT | IP
+  key             String // salted hash of the normalized email or validated IP
+  failures        Int       @default(0)
+  windowStartedAt DateTime
+  lockedUntil     DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([scope, key])
+  @@index([updatedAt])
+  @@index([lockedUntil])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Business workspace: customers, products, orders, manual money
+// ─────────────────────────────────────────────────────────────────────────────
+
+model BusinessWorkspace {
+  id             String   @id @default(cuid())
+  ownerProfileId String   @unique
+  name           String
+  currency       String   @default("NGN")
+  whatsappNumber String?
+  addressLine    String?
+  city           String?
+  state          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  owner Profile @relation(fields: [ownerProfileId], references: [id], onDelete: Cascade)
+
+  customers       Customer[]
+  products        Product[]
+  orders          CustomerOrder[]
+  payments        ManualPayment[]
+  paymentPlans    PaymentPlan[]
+  promises        PaymentPromise[]
+  supplierProfile SupplierProfile?
+  subscription    Subscription?
+  subscriptionPayments SubscriptionPayment[]
+}
+
+model Customer {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  phone       String? // normalized digits for wa.me links
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  workspace BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  orders    CustomerOrder[]
+  promises  PaymentPromise[]
+
+  @@index([workspaceId, name])
+  @@index([workspaceId, phone])
+}
+
+model Product {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  name            String
+  sku             String?
+  description     String?
+  imageUrl        String?
+  unit            String   @default("unit")
+  costPriceKobo   Int      @default(0) // what the seller paid — used for profit, never exposed publicly
+  sellingPriceKobo Int     @default(0)
+  stockQty        Int      @default(0)
+  lowStockAt      Int      @default(0)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace  BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
+  listings   ProductListing[]
+
+  @@unique([workspaceId, sku])
+  @@index([workspaceId, isActive])
+}
+
+model CustomerOrder {
+  id          String    @id @default(cuid())
+  workspaceId String
+  customerId  String
+  orderNumber String
+  status      String    @default("PENDING") // PENDING|CONFIRMED|PROCESSING|READY|DISPATCHED|DELIVERED|CANCELLED
+  channel     String    @default("WHATSAPP") // WHATSAPP|INSTAGRAM|WALK_IN|PHONE|REFERRAL|OTHER
+  currency    String    @default("NGN")
+  totalKobo   Int       @default(0) // revenue
+  costKobo    Int       @default(0) // snapshot of cost at time of sale -> gross profit
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  cancelledAt DateTime?
+  deletedAt   DateTime?
+  /// Set once when a cancellation released this order's Product reservations.
+  /// A second cancellation must never restore the same stock again.
+  stockRestoredAt DateTime?
+
+  workspace BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  customer  Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  items       OrderItem[]
+  payments    ManualPayment[]
+  paymentPlan PaymentPlan?
+  promises    PaymentPromise[]
+  supplierOrder SupplierOrder?
+
+  @@unique([workspaceId, orderNumber])
+  @@index([workspaceId, status])
+  @@index([customerId])
+  @@index([workspaceId, deletedAt])
+}
+
+model OrderItem {
+  id           String @id @default(cuid())
+  orderId      String
+  productId    String?
+  name         String // snapshot — renaming a product must not rewrite past orders
+  qty          Int
+  unitPriceKobo Int
+  unitCostKobo Int    @default(0)
+  lineTotalKobo Int
+  lineCostKobo Int    @default(0)
+  /// How much of Product.stockQty this line currently holds. Set when the
+  /// order reserves stock, cleared when a cancellation releases it.
+  stockDeductedQty Int @default(0)
+
+  order   CustomerOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+}
+
+/// A manual record of money the seller says they received. Never a gateway event.
+model ManualPayment {
+  id                  String    @id @default(cuid())
+  orderId             String
+  workspaceId         String
+  amountKobo          Int
+  method              String    @default("BANK_TRANSFER") // CASH|BANK_TRANSFER|POS|MOBILE_MONEY|OTHER
+  paidAt              DateTime
+  reference           String? // free text: "transfer ref", "POS slip"
+  note                String?
+  recordedByProfileId String?
+  voidedAt            DateTime?
+  voidReason          String?
+  createdAt           DateTime  @default(now())
+
+  order     CustomerOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  workspace BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([workspaceId, paidAt])
+}
+
+model PaymentPlan {
+  id               String   @id @default(cuid())
+  orderId          String   @unique
+  workspaceId      String
+  depositKobo      Int      @default(0)
+  installmentCount Int      @default(1)
+  frequency        String   @default("MONTHLY") // WEEKLY|BIWEEKLY|MONTHLY|CUSTOM
+  startDate        DateTime
+  note             String?
+  createdAt        DateTime @default(now())
+
+  order     CustomerOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  workspace BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+/// "I'll send it on Friday" — tracked so the seller stops relying on memory.
+model PaymentPromise {
+  id          String    @id @default(cuid())
+  workspaceId String
+  orderId     String
+  customerId  String
+  amountKobo  Int
+  promisedFor DateTime
+  status      String    @default("OPEN") // OPEN|KEPT|BROKEN|CANCELLED
+  note        String?
+  resolvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  order     CustomerOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer  Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  workspace BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status, promisedFor])
+  @@index([customerId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Marketplace: suppliers, public listings, private offers
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SupplierProfile {
+  id               String   @id @default(cuid())
+  workspaceId      String   @unique
+  profileId        String   @unique
+  businessName     String
+  about            String?
+  logoUrl          String?
+  city             String?
+  state            String?
+  verificationTier Int      @default(0)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workspace BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  profile   Profile           @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  listings       ProductListing[]
+  applications   ResellerApplication[]
+  agreements     ResellerAgreement[]
+  incomingOrders SupplierOrder[]      @relation("SupplierOrders")
+
+  @@index([verificationTier])
+}
+
+/// The PUBLIC face of a product. Contains retail price only — never a reseller price.
+model ProductListing {
+  id               String   @id @default(cuid())
+  supplierProfileId String
+  productId        String?
+  slug             String   @unique
+  title            String
+  description      String?
+  imagesJson       String   @default("[]") // JSON array of urls
+  category         String?
+  publicPriceKobo  Int
+  currency         String   @default("NGN")
+  moq              Int      @default(1)
+  stockQty         Int      @default(0)
+  isPublished      Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  supplierProfile SupplierProfile @relation(fields: [supplierProfileId], references: [id], onDelete: Cascade)
+  product         Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  offer ResellerOffer?
+
+  @@index([supplierProfileId, isPublished])
+  @@index([category])
+}
+
+/// Private pricing container for a listing. The price itself is versioned below so
+/// an order can always point at the exact terms it was placed under.
+model ResellerOffer {
+  id               String   @id @default(cuid())
+  listingId        String   @unique
+  status           String   @default("ACTIVE") // ACTIVE|PAUSED|ARCHIVED
+  currentVersionId String?  @unique
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  listing ProductListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  versions       ResellerOfferVersion[] @relation("OfferVersions")
+  currentVersion ResellerOfferVersion?  @relation("CurrentOfferVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  applications ResellerApplication[]
+  agreements   ResellerAgreement[]
+}
+
+/// Append-only. Editing terms creates a new row with version + 1.
+model ResellerOfferVersion {
+  id                      String   @id @default(cuid())
+  offerId                 String
+  version                 Int
+  resellerPriceKobo       Int // PRIVATE — gated by agreement, never in a public query
+  minResalePriceKobo      Int?
+  commissionType          String   @default("NONE") // NONE|PERCENT|FIXED
+  commissionValue         Int      @default(0) // basis points when PERCENT (500 = 5%)
+  moq                     Int      @default(1)
+  stockQty                Int      @default(0)
+  paymentTermsDays        Int      @default(0)
+  deliveryResponsibility  String   @default("SUPPLIER") // SUPPLIER|RESELLER|SPLIT
+  advertisingPermission   Boolean  @default(false)
+  customerDataVisibility  String   @default("ORDER_ONLY") // NONE|ORDER_ONLY|FULL
+  notes                   String?
+  createdByProfileId      String?
+  effectiveFrom           DateTime @default(now())
+  createdAt               DateTime @default(now())
+
+  offer ResellerOffer @relation("OfferVersions", fields: [offerId], references: [id], onDelete: Cascade)
+
+  currentFor  ResellerOffer?     @relation("CurrentOfferVersion")
+  orderItems  SupplierOrderItem[]
+  proposals   NegotiationProposal[]
+
+  @@unique([offerId, version])
+  @@index([offerId, effectiveFrom])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reseller network: applications, negotiation, versioned agreements
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ResellerApplication {
+  id                    String    @id @default(cuid())
+  supplierProfileId     String
+  resellerProfileId     String
+  offerId               String?
+  status                String    @default("PENDING") // PENDING|APPROVED|REJECTED|WITHDRAWN
+  message               String?
+  businessSummary       String?
+  verificationTierAtApply Int     @default(0)
+  decidedAt             DateTime?
+  decidedByProfileId    String?
+  decisionNote          String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  supplierProfile SupplierProfile @relation(fields: [supplierProfileId], references: [id], onDelete: Cascade)
+  resellerProfile Profile         @relation("ResellerApplications", fields: [resellerProfileId], references: [id], onDelete: Cascade)
+  offer           ResellerOffer?  @relation(fields: [offerId], references: [id], onDelete: SetNull)
+
+  @@unique([supplierProfileId, resellerProfileId])
+  @@index([status, supplierProfileId])
+  @@index([resellerProfileId, status])
+}
+
+/// One agreement per (offer, reseller). Terms live in versions; the current version
+/// is what new orders price against, older versions keep old orders honest.
+model ResellerAgreement {
+  id               String    @id @default(cuid())
+  offerId          String
+  supplierProfileId String
+  resellerProfileId String
+  status           String    @default("DRAFT") // DRAFT|PENDING_ACCEPTANCE|ACTIVE|SUPERSEDED|TERMINATED
+  currentVersionId String?   @unique
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  terminatedAt     DateTime?
+  terminationReason String?
+
+  supplierProfile SupplierProfile @relation(fields: [supplierProfileId], references: [id], onDelete: Cascade)
+  resellerProfile Profile         @relation("ResellerAgreements", fields: [resellerProfileId], references: [id], onDelete: Cascade)
+  offer           ResellerOffer   @relation(fields: [offerId], references: [id], onDelete: Cascade)
+
+  versions       ResellerAgreementVersion[] @relation("AgreementVersions")
+  currentVersion ResellerAgreementVersion?  @relation("CurrentAgreementVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  proposals NegotiationProposal[]
+
+  @@unique([offerId, resellerProfileId])
+  @@index([supplierProfileId, status])
+  @@index([resellerProfileId, status])
+}
+
+model ResellerAgreementVersion {
+  id                     String    @id @default(cuid())
+  agreementId            String
+  version                Int
+  resellerPriceKobo      Int // locked price for orders placed under this version
+  minResalePriceKobo     Int?
+  commissionType         String    @default("NONE")
+  commissionValue        Int       @default(0)
+  moq                    Int       @default(1)
+  paymentTermsDays       Int       @default(0)
+  deliveryResponsibility String    @default("SUPPLIER")
+  advertisingPermission  Boolean   @default(false)
+  customerDataVisibility String    @default("ORDER_ONLY")
+  effectiveFrom          DateTime  @default(now())
+  effectiveTo            DateTime?
+  acceptedByResellerAt   DateTime?
+  acceptedBySupplierAt   DateTime?
+  createdByProfileId     String?
+  notes                  String?
+  createdAt              DateTime  @default(now())
+
+  agreement ResellerAgreement @relation("AgreementVersions", fields: [agreementId], references: [id], onDelete: Cascade)
+
+  currentFor ResellerAgreement? @relation("CurrentAgreementVersion")
+
+  orderItems SupplierOrderItem[]
+
+  @@unique([agreementId, version])
+  @@index([agreementId, effectiveFrom])
+}
+
+/// A structured counter-offer, not a free-text chat. Each row is one proposal.
+model NegotiationProposal {
+  id                     String    @id @default(cuid())
+  agreementId            String
+  offerVersionId         String?
+  proposedByProfileId    String
+  proposedByRole         String // SUPPLIER|RESELLER
+  resellerPriceKobo      Int
+  minResalePriceKobo     Int?
+  commissionType         String    @default("NONE")
+  commissionValue        Int       @default(0)
+  moq                    Int       @default(1)
+  paymentTermsDays       Int       @default(0)
+  deliveryResponsibility String    @default("SUPPLIER")
+  advertisingPermission  Boolean   @default(false)
+  customerDataVisibility String    @default("ORDER_ONLY")
+  message                String?
+  status                 String    @default("PROPOSED") // PROPOSED|ACCEPTED|DECLINED|WITHDRAWN
+  respondedAt            DateTime?
+  respondedByProfileId   String?
+  createdAt              DateTime  @default(now())
+
+  agreement    ResellerAgreement   @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  offerVersion ResellerOfferVersion? @relation(fields: [offerVersionId], references: [id], onDelete: SetNull)
+  proposedBy   Profile             @relation(fields: [proposedByProfileId], references: [id], onDelete: Cascade)
+
+  @@index([agreementId, status])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Supplier orders & fulfilment
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SupplierOrder {
+  id               String    @id @default(cuid())
+  orderNumber      String    @unique
+  resellerProfileId String
+  supplierProfileId String
+  resellerWorkspaceId String?
+  customerOrderId  String?   @unique // optional link for order coordination
+  status           String    @default("SUBMITTED")
+  // SUBMITTED|STOCK_CONFIRMED|STOCK_DECLINED|AWAITING_PAYMENT|PAID|DISPATCHED|DELIVERED|COMPLETED|CANCELLED|DISPUTED
+  currency         String    @default("NGN")
+  subtotalKobo     Int       @default(0)
+  totalKobo        Int       @default(0)
+
+  stockStatus      String    @default("PENDING") // PENDING|CONFIRMED|PARTIAL|DECLINED
+  stockConfirmedAt DateTime?
+  stockConfirmedByProfileId String?
+  stockNote        String?
+
+  paymentClaimStatus String  @default("NONE") // NONE|CLAIMED|PARTIALLY_CONFIRMED|CONFIRMED|DISPUTED
+
+  dispatchedAt     DateTime?
+  deliveredAt      DateTime?
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+  cancellationReason String?
+  /// Set once when a cancellation or decline released this order's listing
+  /// reservations. A second release must never add the same stock again.
+  stockRestoredAt  DateTime?
+  notes            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  resellerProfile Profile         @relation("ResellerOrders", fields: [resellerProfileId], references: [id], onDelete: Restrict)
+  supplierProfile SupplierProfile @relation("SupplierOrders", fields: [supplierProfileId], references: [id], onDelete: Restrict)
+  customerOrder   CustomerOrder?  @relation(fields: [customerOrderId], references: [id], onDelete: SetNull)
+
+  items      SupplierOrderItem[]
+  claims     PaymentStatusClaim[]
+  dispatches DispatchRecord[]
+  delivery   DeliveryConfirmation?
+  disputes   Dispute[]
+
+  @@index([supplierProfileId, status])
+  @@index([resellerProfileId, status])
+  @@index([createdAt])
+}
+
+model SupplierOrderItem {
+  id                String @id @default(cuid())
+  supplierOrderId   String
+  listingId         String?
+  offerVersionId    String? // the private price actually used
+  agreementVersionId String? // the agreement version that authorised it
+  title             String
+  qty               Int
+  unitPriceKobo     Int
+  lineTotalKobo     Int
+  resalePriceKobo   Int? // what the reseller plans to sell at (profit math)
+  stockConfirmedQty Int?
+  /// How much of ProductListing.stockQty this line currently holds. The
+  /// confirmation writes the net quantity it deducted; decline/cancel clear it.
+  stockDeductedQty  Int @default(0)
+  note              String?
+
+  supplierOrder    SupplierOrder @relation(fields: [supplierOrderId], references: [id], onDelete: Cascade)
+  offerVersion     ResellerOfferVersion? @relation(fields: [offerVersionId], references: [id], onDelete: Restrict)
+  agreementVersion ResellerAgreementVersion? @relation(fields: [agreementVersionId], references: [id], onDelete: Restrict)
+
+  @@index([supplierOrderId])
+}
+
+/// Party-recorded claim, e.g. "Marked as sent by reseller". The other party confirms
+/// or disputes it. SellFlow never verifies money — there is no bank integration.
+model PaymentStatusClaim {
+  id                  String    @id @default(cuid())
+  supplierOrderId     String
+  claimedByProfileId  String
+  claimedByRole       String // RESELLER|SUPPLIER
+  status              String    @default("SENT") // SENT|RECEIVED|PARTIAL|CONFIRMED|DISPUTED
+  amountKobo          Int
+  method              String    @default("BANK_TRANSFER")
+  reference           String?
+  note                String?
+  claimedAt           DateTime  @default(now())
+  confirmedAt         DateTime?
+  confirmedByProfileId String?
+  createdAt           DateTime  @default(now())
+
+  supplierOrder SupplierOrder @relation(fields: [supplierOrderId], references: [id], onDelete: Cascade)
+  disputes      Dispute[]
+
+  @@index([supplierOrderId, claimedAt])
+}
+
+model DispatchRecord {
+  id                   String   @id @default(cuid())
+  supplierOrderId      String
+  courierName          String?
+  trackingRef          String?
+  itemSummary          String?
+  dispatchedByProfileId String?
+  dispatchedAt         DateTime @default(now())
+  note                 String?
+
+  supplierOrder SupplierOrder @relation(fields: [supplierOrderId], references: [id], onDelete: Cascade)
+
+  @@index([supplierOrderId])
+}
+
+model DeliveryConfirmation {
+  id                  String   @id @default(cuid())
+  supplierOrderId     String   @unique
+  confirmedByProfileId String
+  confirmedByRole     String // RESELLER|SUPPLIER
+  receivedQtyOk       Boolean  @default(true)
+  note                String?
+  confirmedAt         DateTime @default(now())
+
+  supplierOrder SupplierOrder @relation(fields: [supplierOrderId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Disputes & moderation
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Dispute {
+  id                     String    @id @default(cuid())
+  reference              String    @unique
+  supplierOrderId        String?
+  /// Optional: the specific payment claim this dispute is about.
+  claimId                String?
+  raisedByProfileId      String
+  raisedByRole           String // RESELLER|SUPPLIER
+  againstProfileId       String?
+  reason                 String
+  // NON_DELIVERY|WRONG_ITEM|QUANTITY_MISMATCH|PAYMENT_NOT_RECEIVED|PRICE_MISMATCH|QUALITY|OTHER
+  description            String
+  evidenceJson           String?
+  status                 String    @default("OPEN") // OPEN|UNDER_REVIEW|RESOLVED|CLOSED
+  outcome                String?   // RESELLER_FAVOUR|SUPPLIER_FAVOUR|MUTUAL|NO_ACTION
+  assignedMediatorProfileId String?
+  resolutionNote         String?
+  resolvedAt             DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  supplierOrder SupplierOrder?     @relation(fields: [supplierOrderId], references: [id], onDelete: SetNull)
+  claim         PaymentStatusClaim? @relation(fields: [claimId], references: [id], onDelete: SetNull)
+  events        DisputeEvent[]
+
+  @@index([status, createdAt])
+  @@index([supplierOrderId])
+  @@index([claimId])
+}
+
+/// Mediator audit trail. Append-only: every state change is a new event.
+model DisputeEvent {
+  id            String   @id @default(cuid())
+  disputeId     String
+  actorProfileId String?
+  actorRole     String? // RESELLER|SUPPLIER|MEDIATOR|SYSTEM
+  type          String // MESSAGE|STATUS_CHANGE|OUTCOME|EVIDENCE|ASSIGNMENT
+  body          String?
+  metadataJson  String?
+  createdAt     DateTime @default(now())
+
+  dispute Dispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+
+  @@index([disputeId, createdAt])
+}
+
+/// Billing is manual by design: there is no gateway, card, wallet or automatic
+/// bank check anywhere in this product. A person confirms the transfer, and that
+/// confirmation is what changes the tier.
+model Subscription {
+  id                 String    @id @default(cuid())
+  workspaceId        String    @unique
+  tier               String    @default("FREE") // FREE|PRO|SUPPLIER_PRO
+  status             String    @default("ACTIVE") // ACTIVE|PENDING_PAYMENT|PAST_DUE|CANCELED
+  currentPeriodStart DateTime  @default(now())
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean   @default(false)
+  activatedAt        DateTime?
+  lastPaymentAt      DateTime?
+  note               String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  workspace BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  payments  SubscriptionPayment[]
+
+  @@index([tier, status])
+  @@index([currentPeriodEnd])
+}
+
+/// One manual upgrade attempt. `proofNote` is the seller's own description of the
+/// transfer (bank, time, reference) — SellFlow stores no bank documents and never
+/// verifies a transfer itself.
+model SubscriptionPayment {
+  id                   String    @id @default(cuid())
+  workspaceId          String
+  subscriptionId       String?
+  tier                 String // PRO|SUPPLIER_PRO
+  amountKobo           Int
+  method               String    @default("BANK_TRANSFER")
+  reference            String?
+  proofNote            String?
+  status               String    @default("SUBMITTED") // SUBMITTED|CONFIRMED|REJECTED
+  submittedByProfileId String
+  decidedByProfileId   String?
+  decidedAt            DateTime?
+  decisionNote         String?
+  periodStart          DateTime?
+  periodEnd            DateTime?
+  createdAt            DateTime  @default(now())
+
+  subscription Subscription?     @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  workspace    BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status, createdAt])
+  @@index([status, createdAt])
+}
+
+/// Platform-wide append-only audit log for security-relevant actions
+/// (price access denials, role changes, status transitions).
+model AuditLog {
+  id             String   @id @default(cuid())
+  actorProfileId String?
+  actorRole      String?
+  action         String
+  entityType     String
+  entityId       String
+  metadataJson   String?
+  ipHash         String?
+  createdAt      DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorProfileId, createdAt])
+  @@index([action, createdAt])
+}
+
+/// Single-use, hashed reset tokens for email-based password recovery (S-09).
+/// The raw reset token exists only briefly in memory; the database stores only
+/// the salted SHA-256 hash.
+model PasswordResetToken {
+  id         String   @id @default(cuid())
+  userId     String
+  hashedToken String
+  used       Boolean  @default(false)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([hashedToken], map: "PasswordResetToken_hashedToken_unique")
+  @@index([userId])
+  @@index([expiresAt])
+}

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en-NG">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f6b4f" />
+    <title>SellFlow — offline</title>
+    <style>
+      :root {
+        --bg: #f6f5f2;
+        --surface: #ffffff;
+        --ink: #1a1a18;
+        --ink-2: #5c5a55;
+        --ink-3: #8b8880;
+        --line: #e5e2db;
+        --accent: #0f6b4f;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
+        display: grid;
+        place-items: center;
+        padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+      }
+      main { width: 100%; max-width: 420px; }
+      .mark {
+        width: 46px; height: 46px; border-radius: 13px;
+        background: var(--accent);
+        display: grid; place-items: center;
+        margin-bottom: 18px;
+      }
+      .mark svg { width: 26px; height: 26px; }
+      h1 { font-size: 1.35rem; margin: 0 0 6px; letter-spacing: -0.01em; }
+      p { margin: 0 0 12px; color: var(--ink-2); }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 18px;
+      }
+      .path {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.8rem;
+        color: var(--ink-3);
+        background: var(--bg);
+        border-radius: 8px;
+        padding: 6px 10px;
+        overflow-wrap: anywhere;
+        margin-bottom: 14px;
+      }
+      .btn {
+        display: flex; align-items: center; justify-content: center;
+        width: 100%; min-height: 48px;
+        border-radius: 11px; border: 1px solid var(--accent);
+        background: var(--accent); color: #fff;
+        font: inherit; font-weight: 600; cursor: pointer;
+      }
+      .btn.secondary {
+        background: var(--surface); color: var(--ink);
+        border-color: var(--line); margin-top: 8px;
+      }
+      .hint { font-size: 0.78rem; color: var(--ink-3); margin-top: 14px; }
+      ul { margin: 0 0 14px; padding-left: 18px; color: var(--ink-2); font-size: 0.9rem; }
+      li { margin-bottom: 4px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 512 512" fill="#fff" xmlns="http://www.w3.org/2000/svg">
+          <rect x="162" y="252" width="52" height="150" rx="12" />
+          <rect x="230" y="196" width="52" height="206" rx="12" />
+          <rect x="298" y="140" width="52" height="262" rx="12" />
+        </svg>
+      </div>
+
+      <h1>You are offline</h1>
+      <p>This screen is served from your phone, so nothing you see here is live.</p>
+
+      <div class="card">
+        <div class="path" id="path">/</div>
+        <ul>
+          <li>Balances, orders and notifications need a connection.</li>
+          <li>Your saved records are safe — nothing was lost.</li>
+          <li>Pages are not stored on the device, so private money data does not sit in the browser cache.</li>
+        </ul>
+        <button class="btn" type="button" onclick="location.reload()">Try again</button>
+        <a class="btn secondary" href="/dashboard">Open dashboard</a>
+      </div>
+
+      <p class="hint">
+        Tip: check your data bundle or move somewhere with signal. On WhatsApp orders, keep the chat
+        handy — you can record the order once you are back online.
+      </p>
+    </main>
+
+    <script>
+      document.getElementById("path").textContent = location.pathname || "/";
+      window.addEventListener("online", function () {
+        location.reload();
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="SellFlow">
+  <rect width="512" height="512" rx="112" fill="#0f6b4f"/>
+  <g fill="#ffffff">
+    <rect x="162" y="252" width="52" height="150" rx="12"/>
+    <rect x="230" y="196" width="52" height="206" rx="12"/>
+    <rect x="298" y="140" width="52" height="262" rx="12"/>
+  </g>
+</svg>

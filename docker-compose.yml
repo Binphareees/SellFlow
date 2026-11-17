@@ -1,0 +1,89 @@
+# SellFlow production stack.
+#
+#   cp .env.production.example .env.production   # fill SESSION_SECRET at least
+#   docker compose up -d --build
+#
+# Compose reads `.env.production` only when you point it there; the variables
+# below fall back to values from the shell or from a `.env` file in this folder.
+# scripts/deploy.sh sources `.env.production` before calling compose.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        # Baked into the client bundle at build time.
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-SellFlow}
+        NEXT_PUBLIC_DEFAULT_CURRENCY: ${NEXT_PUBLIC_DEFAULT_CURRENCY:-NGN}
+    image: ${SELLFLOW_IMAGE:-sellflow:latest}
+    container_name: ${SELLFLOW_CONTAINER:-sellflow-app}
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      # Absolute path on the mounted volume — never a relative one, because the
+      # standalone server runs from /app and Prisma resolves file: URLs from
+      # the schema directory.
+      DATABASE_URL: "file:/app/data/prod.db"
+      # Required: fails the deploy rather than booting with a fallback secret.
+      SESSION_SECRET: "${SESSION_SECRET:?SESSION_SECRET is not set - generate one with openssl rand -base64 32}"
+      SESSION_MAX_AGE_DAYS: ${SESSION_MAX_AGE_DAYS:-30}
+      MAX_AUTH_ATTEMPTS: ${MAX_AUTH_ATTEMPTS:-5}
+      MAX_AUTH_IP_ATTEMPTS: ${MAX_AUTH_IP_ATTEMPTS:-20}
+      AUTH_ATTEMPT_WINDOW_SECONDS: ${AUTH_ATTEMPT_WINDOW_SECONDS:-900}
+      AUTH_LOCKOUT_SECONDS: ${AUTH_LOCKOUT_SECONDS:-900}
+      AUTH_THROTTLE_RETENTION_SECONDS: ${AUTH_THROTTLE_RETENTION_SECONDS:-86400}
+      AUTH_THROTTLE_MAX_ROWS: ${AUTH_THROTTLE_MAX_ROWS:-50000}
+      # Empty by default: forwarding headers are not trusted unless a proxy is
+      # explicitly configured to add the matching header.
+      TRUSTED_PROXY_SECRET: ${TRUSTED_PROXY_SECRET:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-SellFlow}
+      NEXT_PUBLIC_DEFAULT_CURRENCY: ${NEXT_PUBLIC_DEFAULT_CURRENCY:-NGN}
+    volumes:
+      # SQLite file (and its -journal/WAL siblings) survive container rebuilds.
+      - sellflow-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 20s
+    # SQLite is a single-writer store: never run two app replicas on one volume.
+    deploy:
+      replicas: 1
+
+  # One-off real-user onboarding against the live SQLite volume. Not started by
+  # `docker compose up` because of the profile. Take a backup before writing.
+  pilot:
+    profiles: ["pilot"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: pilot
+    image: ${SELLFLOW_PILOT_IMAGE:-sellflow-pilot:latest}
+    container_name: ${SELLFLOW_PILOT_CONTAINER:-sellflow-pilot}
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "file:/app/data/prod.db"
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      NEXT_PUBLIC_DEFAULT_CURRENCY: ${NEXT_PUBLIC_DEFAULT_CURRENCY:-NGN}
+      PILOT_SUPPLIER_PASSWORD: ${PILOT_SUPPLIER_PASSWORD:-}
+      PILOT_RESELLER_PASSWORD: ${PILOT_RESELLER_PASSWORD:-}
+    volumes:
+      - sellflow-data:/app/data
+    stdin_open: true
+    tty: true
+
+volumes:
+  sellflow-data:
+    # Fixed name so scripts/deploy.sh can mount it into a verification
+    # container before the swap.
+    name: sellflow-data

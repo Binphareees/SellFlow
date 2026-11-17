@@ -1,5 +1,7 @@
 # MVP Specification (build only after GO)
 
+> **SUPERSEDED — historical document (2026-11-04).** This spec describes the original local-first, IndexedDB-only MVP. The actual implementation is a server-rendered Next.js 15 + Prisma + SQLite application with accounts, a marketplace, private reseller pricing, supplier orders and disputes. Retained for history; do not use as current build instructions. See `PRD_V0.2.md`, `README.md`, and `STATE.md` D-011.
+
 ## User story
 As a small seller who takes orders on WhatsApp, I want to log orders fast, see exactly who owes me, and send a clear reminder or receipt in one tap, so I stop losing money in scattered chats and notes.
 

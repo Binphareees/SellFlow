@@ -1,0 +1,10 @@
+# SellFlow Stage 2 — S-09 and S-14 Acceptance Evidence Manifest
+# Generated: 2026-11-10
+# Investigation boundary: authorized read-only on real project state and prisma/dev.db.
+#   Safe disposable checks reviewed from existing harness evidence only; no migration,
+#   seed, build, server, or HTTP run executed this turn. No protected database modified.
+
+file,판매증거-역할,format,bytes
+STAGE2_TASK9_S09_ACCEPTANCE_FINDINGS.md,read-only S-09 acceptance findings (this investigation),text/markdown,3083
+STAGE2_TASK8_S14_ACCEPTANCE_FINDINGS.md,read-only S-14 acceptance findings (this investigation),text/markdown,2978
+STAGE2_S09_S14_ACCEPTANCE_EVIDENCE_MANIFEST.txt,this manifest,text/plain,512

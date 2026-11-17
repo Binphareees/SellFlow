@@ -1,0 +1,23 @@
+SellFlow Revision 8 Report — Checksum Manifest
+===============================================
+
+Report file: STAGE2_S09_S14_REVISION8_RECONCILIATION_PROOF_REPORT.md
+
+Computed values (from actual UTF-8 bytes of the finalized report):
+
+SHA-256: a110c6d6a30b31aa5c6e1996d8944072640833be26db6684662f6f4c898a91ef
+SHA-512: f31668beb07f5137571943ce1cb68c1db4da784ede2c7da1b9be272b4765d2566dfafeba871228e4f05eaf6952871087f875245c16bd932abba0e411d4cf86c7
+Bytes:   16082
+
+Calculation method:
+- Read the report file as UTF-8 text.
+- Encode to bytes using UTF-8.
+- Compute SHA-256 and SHA-512 from those bytes.
+- Count bytes as the length of the UTF-8 encoded byte sequence.
+
+These values describe the finalized report file:
+STAGE2_S09_S14_REVISION8_RECONCILIATION_PROOF_REPORT.md
+
+Timestamp (UTC): 2026-11-10T02:16:34Z
+
+Note: This manifest is a separate artifact. It is NOT embedded in the report.

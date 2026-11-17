@@ -1,5 +1,7 @@
 # Tech Stack and Platform Risks
 
+> **SUPERSEDED — historical document (2026-11-04).** This file describes the original Vite + IndexedDB + static-host plan. The actual stack is Next.js 15 App Router + Prisma 6 + SQLite with first-party sessions, deployed as a Node server. Retained for history; see `README.md` and `STATE.md` D-011 for the current architecture.
+
 ## MVP
 - React + Vite, plain CSS or Tailwind
 - `vite-plugin-pwa` (manifest, service worker, offline cache)

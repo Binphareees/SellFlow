@@ -1,0 +1,69 @@
+S-09 DISPOSABLE VERIFICATION — RUN REPORT (THIS TURN)
+==========================================================
+
+Temp dir: /tmp/sellflow-s09-e2e-f8n7G1
+Test DB: /tmp/sellflow-s09-e2e-f8n7G1/test.db
+Test URL: file:/tmp/sellflow-s09-e2e-f8n7G1/test.db
+
+PRIMARY HARNESS OUTPUT (verbatim, as captured):
+------------------------------------------------
+[harness] tmpdir=/tmp/sellflow-s09-e2e-f8n7G1
+[harness] test_database=/tmp/sellflow-s09-e2e-f8n7G1/test.db
+[harness] test_url=file:/tmp/sellflow-s09-e2e-f8n7G1/test.db
+[harness] session_secret_present=true
+[harness] trusted_proxy_secret_present=true
+[harness] test_database=/tmp/sellflow-s09-e2e-f8n7G1/test.db
+[harness] applying migrations to disposable db
+[harness] migrate_deploy_exit=0
+[harness] migration_check_sql_file=/tmp/tmp.kqU2iaI0Fb
+[harness] migration_check_sql_size_bytes=80
+[harness] migration_check_dbcli_exit=0
+[harness] migration_check_dbcli_log=warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).For more information, see: https://pris.ly/prisma-config┌─────────────────────────────────────────────────────────┐│  Update available 6.19.3 -> 8.0.0-rc.33                 ││                                                         ││  This is a major update - please follow the guide at    ││  https://pris.ly/d/major-version-upgrade                ││                                                         ││  Run the following to update                            ││    npm i --save-dev prisma@latest                       ││    npm i @prisma/client@latest                          │└─────────────────────────────────────────────────────────┘Script executed successfully.
+[harness] migration_check_client_exit=0
+[harness] migration_check_client_log=prisma_client_table_found=trueprisma_client_table_names=["PasswordResetToken"]
+[harness] seeding disposable database
+[harness] seed_exit=0
+[harness] generating prisma client
+[harness] prisma_generate_exit=0
+[harness] building next production bundle
+[harness] next_build_exit=0
+[stdin]:4
+const p = s.address().port;
+                     ^
+
+TypeError: Cannot read properties of null (reading 'port')
+    at [stdin]:4:22
+    at runScriptInThisContext (node:internal/vm:209:10)
+    at node:internal/process/execution:446:12
+    at [stdin]-wrapper:6:24
+    at runScriptInContext (node:internal/process/execution:444:60)
+    at evalFunction (node:internal/process/execution:279:30)
+    at evalTypeScript (node:internal/process/execution:291:3)
+    at node:internal/main/eval_stdin:53:5
+    at Socket.<anonymous> (node:internal/process/execution:201:5)
+    at Socket.emit (node:events:531:35)
+
+Node.js v22.23.2
+
+
+CRITICAL OBSERVATIONS:
+------------------------------------------------
+1) DB ISOLATION: disposable DB under /tmp only. Test URL = file:<tmp>/test.db
+2) db fingerprint check is harness-intended, NOT executed here: harness runs sha256sum ops on the disposable DB and mirrored output.
+3) Migrations: migrate_deploy_exit=0
+4) PasswordResetToken table: prisma_client_table_found=trueprisma_client_table_names=["PasswordResetToken"]
+5) Seed: seed_exit=0
+6) Build: next_build_exit=0
+7) Server start NEVER reached: harness failed at port reservation (node stdin port probe crashed)
+
+NEXT-START LOG (verbatim if present):
+------------------------------------------------
+(next-start.log not mirrored by harness — server never reached port reservation stage)
+
+CONCLUSION:
+------------------------------------------------
+This run DID NOT complete the disposable S-09 server/test stage because the
+harness crashed during port reservation. No HTTP tests ran this turn.
+Evidence preserved: full harness log above; disposable DB was created under /tmp
+and left as evidence. No prisma/dev.db access or change occurred.
+

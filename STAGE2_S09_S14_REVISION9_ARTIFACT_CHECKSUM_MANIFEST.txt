@@ -1,0 +1,30 @@
+# SellFlow — Revision 9 Disposable Evidence Report Checksum Manifest
+
+This manifest covers the report file:
+
+- STAGE2_S09_S14_REVISION9_DISPOSABLE_EVIDENCE_REPORT.md
+
+Only that report file is covered by this manifest.
+
+---
+
+## Report file
+
+- path: STAGE2_S09_S14_REVISION9_DISPOSABLE_EVIDENCE_REPORT.md
+- size: 20732 bytes
+- SHA-256: 3b789d5a5ff0059a8bb6a991f3cc8b8721cd0352a571d20fa9b3c080ab97cbc3
+- SHA-512: 388fd2496c00d46e18cc12de64624cb90ee07a264bbfe289e55540582415f138eda44163949834254ddad69e7b28b05419bb729f4ad451d6f82c928927bdbabd
+
+---
+
+## Manifest self-check
+
+Manifest self-check is expected to be performed by recomputing the report hashes from the report file bytes and comparing them against the values above. The manifest does not itself embed a self-hash block so that this manifest cannot be used to silently lock in a stale report hash.
+
+## Format notes
+
+- SHA-256 and SHA-512 are computed over the exact UTF-8 report bytes.
+- This manifest is authoritative only if it matches a freshly recomputed report hash.
+
+Manifest generated for STAGE2_S09_S14_REVISION9_DISPOSABLE_EVIDENCE_REPORT.md only.
+

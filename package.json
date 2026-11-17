@@ -1,0 +1,45 @@
+{
+  "name": "sellflow",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "prisma generate && next build",
+    "start": "next start -p 3000",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "prisma db seed",
+    "db:reset": "tsx scripts/db-reset.ts",
+    "db:studio": "prisma studio",
+    "pilot:seed": "tsx scripts/seed-pilot.mjs",
+    "verify": "node scripts/verify-api.mjs",
+    "test:e2e": "node scripts/verify-api.mjs",
+    "test:e2e:clean": "node scripts/test-e2e-clean.mjs",
+    "test:pwa": "node scripts/verify-pwa.mjs",
+    "validate:register": "node scripts/validate-security-register.mjs",
+    "deploy": "bash scripts/deploy.sh",
+    "icons": "node scripts/generate-icons.mjs"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "bcryptjs": "^3.0.3",
+    "next": "15.5.28",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "resend": "^6.37.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^5.1.0",
+    "prisma": "^6.19.3",
+    "tsx": "^4",
+    "typescript": "^5",
+    "vitest": "^5.1.0"
+  }
+}

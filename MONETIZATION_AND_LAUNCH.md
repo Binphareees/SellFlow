@@ -1,5 +1,7 @@
 # Monetization and Launch
 
+> **Status note (2026-11-04, restated for D-019):** Implementation is **authorized** as of 2026-11-04 (owner Implementation GO, `STATE.md` D-019), while **Phase 0 validation remains incomplete** — no interviews, dated commitments or concierge results exist, and a validation GO has not been granted. Development and validation now run in parallel; this document still describes later experiments and is **not** a launch approval. Subscription billing exists in the codebase but is **out of V1 scope** and must not be presented as approved behavior (conflict C-03 remains open). See `STATE.md`, `VALIDATION_PLAN.md`, and `SELLFLOW_V02_AUDIT_REPORT.md`.
+
 ## Positioning
 "Know who still owes you, and remind them in one tap."
 

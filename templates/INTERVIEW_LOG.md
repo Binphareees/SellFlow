@@ -1,28 +1,39 @@
-# Interview Log (copy one block per seller)
+# Interview Log — Field Card (copy one per interview)
 
-**Date:**
-**Seller (initials/handle):**
-**Segment / country:**
-**Channel (call / chat / in person):**
+> **Canonical record:** [`../INTERVIEW_LOG.md`](../INTERVIEW_LOG.md). This template is retained for printing and field use. Keep filled-in copies private; do not commit real participant data.
 
-**Last order walkthrough (what actually happened):**
+**Participant reference:**
+**Participant type:** A business owner / B supplier / C reseller
+**Business category:** retail / fashion / electronics / food / beauty / household goods / wholesale-distribution / services / other
+**Pillar fit:** business management / marketplace / both / unclear
+**Location (city / state / country):**
+**Interview date:**
+**Interviewer:**
+**Channel:** call / voice note / in person / chat
+**Consent to take notes:** yes / no
 
-**Where they track orders/payments (tool, notebook, chats):**
+**Current workflow (orders, payments, balances):**
 
-**Money owed to them right now (amount/count, how they knew):**
+**Problems described without prompting (exact words; mark prompted/unprompted):**
 
-**Last mistake (forgotten order, wrong balance) and its cost:**
+**Existing tools:**
 
-**How they remind debtors:**
+**Evidence and examples (specific event, amount, time, customer impact):**
 
-**Tools tried before and why they stopped:**
+**Feature demonstration feedback:**
 
-**What they pay for any tool today:**
+**Willingness to test (their words):**
 
-**Quotes worth keeping (exact words):**
-
-**Commitment asked (A / B / C / none):**
-**Response:** (accepted / declined / vague) **Start date if accepted:**
+**Commitment ask:** A dated prototype use / B real artifact / C follow-up / none
+**Commitment response:** accepted / declined / vague
+**Agreed start date:**
+**Follow-up date and channel:**
 
 **Signal strength:** strong / weak / none
-**Notes (what surprised me):**
+**Why:**
+
+**Exact quotes:**
+
+**What surprised me:**
+
+**Notes (redact names, phone numbers and prices):**

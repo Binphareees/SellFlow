@@ -1,0 +1,25 @@
+node_modules/
+.next/
+out/
+build/
+*.log
+npm-debug.log*
+
+# local database + migrations artifacts that are environment specific
+prisma/data/
+prisma/dev.db
+prisma/dev.db-journal
+prisma/*.db
+prisma/*.db-journal
+
+# secrets
+.env
+.env.local
+.env*.local
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.tsbuildinfo
+next-env.d.ts
