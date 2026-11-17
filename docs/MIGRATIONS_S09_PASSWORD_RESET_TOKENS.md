@@ -91,9 +91,16 @@ DATABASE_URL="file:$PWD/prisma/dev.db" npx prisma migrate status
 
 - An inline table-level `UNIQUE` constraint cannot be dropped with `ALTER TABLE`; only a table
   rebuild changes it.
-- `PRAGMA foreign_keys` cannot be toggled inside a transaction, and Prisma wraps migrations in one,
-  so the migration uses `PRAGMA defer_foreign_keys = ON`. No other table references
-  `PasswordResetToken`, so the rebuild cannot violate a parent relationship.
+- `PRAGMA foreign_keys` cannot be changed inside a transaction, so the migration uses
+  `PRAGMA defer_foreign_keys = ON`. No other table references `PasswordResetToken`, so the rebuild
+  cannot violate a parent relationship.
+- **Prisma does not guarantee transactional rollback of all migration DDL** (corrected 2026-11-18,
+  audit C-1 / finding A6-F7). Experiment shows statements executed before a script's first DML are
+  *not* rolled back when a later statement fails, while DDL following the first DML is. This migration
+  therefore keeps its `DROP TABLE` (line 50), `RENAME` (line 52) and index creation (lines 54–58) after
+  the `INSERT … SELECT` (line 47); that ordering is what makes a later failure recoverable. A failure
+  before the insert can leave the created objects behind — see
+  `A17_A6_IMPLEMENTATION_CLOSEOUT_REPORT.md` §2.1.
 - DDL text formatting does not affect Prisma's comparison; object names and shapes do.
 
 ## 7. Known functional gaps (unchanged; Part 2 scope)

@@ -12,6 +12,15 @@ no history rewrite, no `db push`, no deletion of untracked files or `prisma/disp
 
 Neither result constitutes owner acceptance.
 
+**Revision 2 — 2026-11-18, documentary correction (audit C-1).** Independent audit
+`A17_A6_INDEPENDENT_ACCEPTANCE_AUDIT.md` finding **A6-F7** established that §2 of the A6 section below
+incorrectly implied Prisma guarantees transactional rollback of all migration DDL. That blanket claim is
+**withdrawn** and replaced by §2.1, which records the experimentally established behaviour and the
+ordering risk it implies. `docs/MIGRATIONS_S09_PASSWORD_RESET_TOKENS.md` §6 carried the same wording and
+is corrected identically. C-2 and C-3 are recorded as standing audit notes at the end of this document.
+This revision changed **documentation only**: no code, test, migration, schema, database content or Git
+history was modified, and no migration was executed.
+
 ---
 
 # A17 — TEST REPAIRS
@@ -135,9 +144,49 @@ The script handles all three starting states:
 2. rebuild into `new_PasswordResetToken` and copy every row,
 3. drop, rename, recreate the named unique index and both non-unique indexes.
 
-`PRAGMA defer_foreign_keys = ON` is used because `PRAGMA foreign_keys` cannot be toggled inside the
-transaction Prisma wraps migrations in, and no table references `PasswordResetToken`, so the rebuild
-cannot violate a parent relationship.
+`PRAGMA defer_foreign_keys = ON` is used because `PRAGMA foreign_keys` cannot be changed inside a
+transaction, so the deferral has to be requested explicitly. No table references `PasswordResetToken`,
+so the rebuild cannot violate a parent relationship.
+
+> **Corrected (revision 2, audit C-1).** Revision 1 justified this pragma by saying Prisma "wraps
+> migrations in" a transaction. That is the claim being withdrawn: Prisma does **not** guarantee
+> transactional rollback of all migration DDL. The next subsection states what was actually observed.
+
+### 2.1 Transaction behaviour of SQLite migrations (corrected)
+
+Prisma's migration runner is **not** a blanket rollback guarantee. Measured on disposable `/tmp`
+databases (all seven migrations applied, one token row present, then a deliberately failing migration),
+reproduced five times, the deciding factor is **statement ordering**:
+
+| Case | Failing migration body | Result |
+|---|---|---|
+| A | `DROP TABLE PasswordResetToken; SELECT * FROM nope;` | **table gone, rows lost** |
+| E | `PRAGMA defer_foreign_keys=ON; DROP …; SELECT * FROM nope;` | **table gone** |
+| F | `CREATE TEMP TABLE t(x); DROP …; SELECT * FROM nope;` | **table gone** |
+| D | `INSERT …; DROP …; SELECT * FROM nope;` | rolled back — table present, 1 row |
+| tx2 | same as D, different database | rolled back — table present, 1 row |
+
+**Established behaviour:** statements executed *before the first DML statement* of a migration script are
+**not** rolled back when a later statement fails; once a DML statement has run, DDL after it *is* rolled
+back with the rest of that unit of work. The underlying mechanism is a **hypothesis, not a proven
+Prisma guarantee** — do not plan a destructive migration on it.
+
+**Why this migration's ordering matters.** Its first DML is the `INSERT … SELECT` at line 47. The
+`DROP TABLE` at line 50, the `ALTER TABLE … RENAME` at line 52 and the three index creations at lines
+54–58 all follow that insert, so they sit inside the rolled-back window — the DML-first configuration
+that cases D and tx2 showed to be recoverable. Reversing the order (drop first, then copy) would put the
+destructive statement in the uncovered prefix and would lose the table on any later failure. The safety
+of this migration is therefore an **empirical property of its statement ordering, not a documented
+guarantee**, and it is the reason the ordering must not be rearranged in review.
+
+**Residual risk (pre-DML failure).** Everything before the first DML — the `PRAGMA` at line 23 and the
+two `CREATE TABLE` statements at lines 26 and 37 — is outside that window. A failure there, or a failure
+*of* the `INSERT` itself (for example a legacy row that violates the new foreign key), aborts the script
+with the created objects still persisted. A naive retry would then collide with
+`new_PasswordResetToken` and require manual cleanup. Whether that residue actually appears was not
+isolated by the audit (finding A6-F9, **UNVERIFIED**), so it is carried as an open risk rather than a
+known defect. Mitigation for any future destructive migration: verified backup plus a rehearsed failure
+path before touching a database that holds real rows — the practice already used here.
 
 ## 3. Files created / modified
 
@@ -185,6 +234,12 @@ Recovery copy first, then the real file.
 
 No historical checksum was edited. No migration was deleted or reordered. `migrate status` exit 0.
 
+> **Standing audit note C-2.** `prisma migrate status` reports "Database schema is up to date!" and does
+> **not** surface the historical checksum mismatch on `20261105060000_session_lifecycle`. The anomaly is
+> therefore silent in normal operation and appears only in a checksum audit or on `migrate dev`. This is
+> pre-existing and deliberate (see `docs/MIGRATIONS_S09_PASSWORD_RESET_TOKENS.md`), not introduced by
+> `decfa68`, but it must not be treated as evidence that no mismatch exists.
+
 ## 8. Prisma validation
 
 `npx prisma validate` → "The schema at prisma/schema.prisma is valid", exit 0.
@@ -192,7 +247,11 @@ No historical checksum was edited. No migration was deleted or reordered. `migra
 ## 9. SQLite limitations encountered
 
 - Inline table-level `UNIQUE` cannot be dropped by `ALTER TABLE`; a rebuild is mandatory.
-- `PRAGMA foreign_keys` is a no-op inside a transaction; `defer_foreign_keys` is the usable form.
+- `PRAGMA foreign_keys` is a no-op inside a transaction (documented SQLite behaviour);
+  `defer_foreign_keys` is the usable form. Note that this pragma is the script's first statement and is
+  therefore itself outside the transactional window described in §2.1; whether the deferral is still in
+  force for the transactional part of the script was not measured. It does not affect the outcome here,
+  because no table references `PasswordResetToken`.
 - DDL whitespace does not affect Prisma's comparison; object names and shapes do — which is exactly
   why the constraint naming had to be normalised rather than merely re-formatted.
 
@@ -235,3 +294,41 @@ Commits are listed in the accompanying message.
 4. `A17` counts are higher than the historical 500 / 484 figures because the PWA suite now runs and an
    assertion was added; the numbers are not comparable across eras without that context.
 5. Owner acceptance is still outstanding for both workstreams and for S-14/S-12 provenance.
+6. Transactional safety is a property of statement ordering, not a Prisma guarantee (§2.1); a pre-DML
+   failure can leave created objects behind (audit A6-F9, UNVERIFIED).
+7. `prisma migrate status` does not detect the historical checksum mismatch (standing note C-2).
+
+---
+
+# STANDING AUDIT NOTES
+
+Recorded on owner instruction together with the C-1 correction. Neither note is a defect in the shipped
+work; both are permanent caveats on how the evidence may be read.
+
+## C-2 — `migrate status` is silent about the historical checksum mismatch
+
+`prisma migrate status` prints "Database schema is up to date!" on `prisma/dev.db` even though the row for
+`20261105060000_session_lifecycle` records `539bd5b6…` while the file hashes to `33b41fc7…`. Status checks
+schema shape and row presence, not recorded checksum equality. Consequence: the mismatch will never appear
+in routine operation and cannot be ruled out by `migrate status` alone; only a checksum comparison over
+`_prisma_migrations` against the file tree detects it. Retained deliberately — see
+`docs/MIGRATIONS_S09_PASSWORD_RESET_TOKENS.md` §2.
+
+## C-3 — "run both affected tests individually" was not satisfied literally
+
+`scripts/verify-api.mjs` exposes only one selector (`ONLY_S12`); there is no per-check filter, and none was
+added, because adding one would have changed the suite's mode semantics mid-repair. The two repaired
+assertions were therefore evidenced by their own named result lines in two independent full runs, not by
+isolated execution. This is a **process deviation, not a verification gap**: both assertions are named,
+individually observed, and reproduced, and neither depends on state the other creates.
+
+## Correction status
+
+| Item | Status |
+|---|---|
+| C-1 — withdraw the transaction claim, document DDL-before-DML behaviour and DML-before-DROP ordering | **Applied** in this revision (§2, §2.1, §9; mirrored in `docs/MIGRATIONS_S09_PASSWORD_RESET_TOKENS.md` §6) |
+| C-2 — standing note on `migrate status` silence | **Applied** (§7 and above) |
+| C-3 — standing note on non-literal individual execution | **Applied** (above) |
+| Applied migration `20261118000000_password_reset_token_alignment` | **Unchanged** — byte-identical, not re-run |
+| Historical migrations | **Unchanged** — no file, checksum or ordering touched |
+| `prisma/dev.db` contents | **Unchanged** — no migration or experiment executed against it |
