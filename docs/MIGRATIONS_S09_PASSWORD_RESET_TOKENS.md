@@ -33,7 +33,7 @@ Applied to the local development database: yes. `_prisma_migrations` records
 table plus both indexes are present in `prisma/dev.db`.
 
 Fresh-database reproduction: verified in Part 1. A disposable database built with
-`prisma migrate deploy` alone contains `PasswordResetToken` with all five columns
+`prisma migrate deploy` alone contains `PasswordResetToken` with all six columns
 (`id`, `userId`, `hashedToken`, `used`, `expiresAt`, `createdAt`), the unique index
 and both non-unique indexes, followed by the guarded seed. No extra migration is
 required to obtain the model.
@@ -48,13 +48,25 @@ required to obtain the model.
    `migrate status` do not object; a future `migrate dev` may. Do not edit this
    migration again; if the drift must be resolved, that is an owner-approved
    decision with its own verification.
-2. **Constraint naming drift.** The migration creates an unnamed
-   `UNIQUE("hashedToken")`, while the datamodel names the constraint
-   `PasswordResetToken_hashedToken_unique` via `@@unique(..., map: ...)`. As a
-   result `prisma migrate diff --from-migrations … --to-schema-datamodel …` emits
-   `[*] Redefined table "PasswordResetToken"`. Uniqueness is still enforced; the
-   difference is the constraint name Prisma would generate. Fixing it requires a
-   new migration, which is outside Part 1's authorization.
+2. **Constraint naming drift.** The current migration SQL creates the uniqueness
+   inline and unnamed (`UNIQUE("hashedToken")`), while the datamodel names the
+   constraint `PasswordResetToken_hashedToken_unique` via
+   `@@unique(..., map: ...)`. As a result
+   `prisma migrate diff --from-migrations … --to-schema-datamodel …` emits
+   `[*] Redefined table "PasswordResetToken"` (observed 2026-11-17: a table
+   redefinition, not a data difference). Uniqueness is
+   enforced either way; what differs is the constraint name Prisma would generate.
+
+   The **live development database disagrees with the current migration file here**:
+   `prisma/dev.db` carries `CREATE UNIQUE INDEX "PasswordResetToken_hashedToken_unique"`
+   (the datamodel-aligned name), not the inline unnamed unique constraint the current
+   file would create. Combined with the checksum drift above, this shows the applied
+   schema was not produced byte-for-byte by the migration file as it now stands
+   (either the file was edited after application, or `db push` realigned the index).
+   A fresh database built only from `prisma migrate deploy` is therefore not
+   index-for-index identical to `prisma/dev.db`, although every column, foreign key
+   and uniqueness rule is functionally equivalent. Reconciling this requires a new
+   migration, which is outside Part 1's authorization.
 3. **Mixed-purpose migration.** Adding S-09 DDL to the S-14 migration means the two
    findings cannot be deployed or reasoned about independently. This is recorded as
    technical debt; no split was performed.
