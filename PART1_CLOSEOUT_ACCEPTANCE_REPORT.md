@@ -218,7 +218,7 @@ All 21 are present in the verified backup (per-path check). None is deleted.
 | 12 | `_r8_validate_report.py` | 1.2 KB | Scratch script | yes | No |
 | 13 | `_r8_verify_cleanup.py` | 378 B | Scratch script | yes | No |
 | 14 | `_s09_contract_inspection_out.txt` | 42.5 KB | Captured inspection output | yes | No |
-| 15 | `home/` | 61.5 KB | Path artifact (11 entries); contains a copy of `scripts/test-s12-isolated.mjs` | yes | No — duplicate of a committed file |
+| 15 | `home/` | 61.5 KB | Path artifact (11 entries); contains an **earlier variant** of `scripts/test-s12-isolated.mjs` (1052 lines / 39,743 B vs 1053 / 39,744 B; 5 changed lines — a class declaration moved and one quoting difference) | yes | No — superseded variant, not unique application work; the committed script is the maintained one |
 | 16 | `prisma/disposable_scratch/` | 9.0 MB | Experiment DBs + duplicate migration dirs (48 entries) | yes | **No — but see warning below** |
 | 17 | `prisma/schema.prisma.tmp` | 127 B | Generated temp (8-line generator block) | yes | No |
 | 18 | `scripts/s09-e2e-run.sh.bak` | 30.3 KB | Superseded script backup | yes | No |
