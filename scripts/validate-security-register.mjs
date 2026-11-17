@@ -14,7 +14,15 @@
  *   4. Every status is from the approved vocabulary.
  *   5. The set of "Accepted" rows equals the set of rows in the acceptance
  *      evidence table, and neither table repeats an ID.
- *   6. The audit report still contains a heading for every canonical ID.
+ *   6. The "Pending owner acceptance" table matches its expected set and no
+ *      pending finding is also marked Accepted.
+ *   7. The audit report still contains a heading for every canonical ID.
+ *
+ * 2026-11-17 closeout: S-14 was removed from the accepted set. Its acceptance
+ * rested only on an agent-authored report ("Buffy (automated acceptance
+ * review)") that itself says a human owner review may still be warranted, and
+ * no owner acceptance decision exists in the repository. Implementation
+ * authorization (D-019) and passing tests are not acceptance.
  *
  * Exit code 0 = all checks pass, 1 = at least one failure.
  */
@@ -53,7 +61,13 @@ const STATUSES = new Set([
   "Explicitly excluded",
 ]);
 
-const EXPECTED_ACCEPTED = ["S-01", "S-02", "S-12", "S-14"];
+const EXPECTED_ACCEPTED = ["S-01", "S-02", "S-12"];
+
+/**
+ * Findings whose evidence exists but whose acceptance is not recorded.
+ * A finding listed here must not also be Accepted.
+ */
+const EXPECTED_PENDING = ["S-14"];
 
 const failures = [];
 const passes = [];
@@ -134,7 +148,11 @@ if (!registerSection) {
     .map(([id]) => id)
     .sort();
 
-  const acceptanceSection = section(state, "### Acceptance evidence", "## Changelog");
+  const acceptanceSection = section(
+    state,
+    "### Acceptance evidence",
+    "### Pending owner acceptance",
+  );
   if (!acceptanceSection) {
     fail("STATE.md: acceptance evidence section not found");
   } else {
@@ -160,6 +178,34 @@ if (!registerSection) {
       );
     } else {
       pass("acceptance evidence IDs match the accepted set");
+    }
+  }
+
+  // ── 6: pending owner acceptance ───────────────────────────────────────────
+  const pendingSection = section(
+    state,
+    "### Pending owner acceptance",
+    "### Acceptance provenance caveats",
+  );
+  if (!pendingSection) {
+    fail("STATE.md: '### Pending owner acceptance' section not found");
+  } else {
+    const pendingIds = pendingSection
+      .split("\n")
+      .filter((l) => /^\|\s*S-\d\d\s*\|/.test(l))
+      .map((l) => cells(l)[0]);
+    if (JSON.stringify([...pendingIds].sort()) !== JSON.stringify([...EXPECTED_PENDING].sort())) {
+      fail(
+        `pending-acceptance IDs ${JSON.stringify([...pendingIds].sort())} != expected ${JSON.stringify(EXPECTED_PENDING)}`,
+      );
+    } else {
+      pass(`pending-acceptance IDs match expected ${EXPECTED_PENDING.join(", ")}`);
+    }
+    const alsoAccepted = pendingIds.filter((id) => seen.get(id)?.status === "Accepted");
+    if (alsoAccepted.length) {
+      fail(`pending findings also marked Accepted: ${alsoAccepted.join(", ")}`);
+    } else {
+      pass("no pending finding is simultaneously marked Accepted");
     }
   }
 }
