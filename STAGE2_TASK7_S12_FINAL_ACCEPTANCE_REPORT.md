@@ -347,3 +347,40 @@ Triggers: none.
 - Prior retained isolated runs (5): `/tmp/sellflow-s12-isolated-{9oCZOU,FNrLPK,h18jeM,NvFrFJ,vrU7XZ}/` (each: server.log + test.db, no trigger, no s12-critical user)
 
 These retained artifacts are intentional (`--keep`) and are not resource leaks.
+
+---
+
+## 11. Owner acceptance addendum — 2026-11-18
+
+**Owner acceptance recorded 2026-11-18.** The project owner formally accepted S-12 — Audit Trail
+Reliability on 2026-11-18 on the basis of the fresh independent isolated verification of the same
+date, not on the 2026-11-09 agent-authored review below.
+
+- **Basis:** fresh independent isolated verification — `node scripts/test-s12-isolated.mjs --skip-build --keep`,
+  harness exit 0 in 20.3 s, **8/8 S-12 assertions PASS**, 0 FAIL, 0 SKIP. Isolation: disposable
+  `mkdtemp` database `/tmp/sellflow-e2e-s12-isolated-GhtfiJ/test.db`, both isolation proofs passed
+  (canary workspace `S12-HARNESS-MWLFJ080`; `/proc/386676/environ` `DATABASE_URL` matched the temp
+  database only). Persisted state: 9 `AuditLog` rows (4 seeded `seed-audit-*` + 5 written during the
+  run), `PRAGMA integrity_check` `ok`, 0 FK violations, no `s12-critical%` user (critical
+  registration rolled back), `s12-recovered+%` user + audit row present, fault-injection trigger
+  absent from `sqlite_master`. `prisma/dev.db` fingerprint unchanged:
+  `59d9cb2c6bd8ee65c87479c486c2779fb4d5263a371673c7bf1dd5fd3885592c`, 983,040 bytes; HEAD
+  unchanged before and after. Retained evidence:
+  `/tmp/sellflow-s12-independent-verification-2026-11-18/` (`07-REPORT.md` + artifacts 00–06)
+  and `/tmp/sellflow-e2e-s12-isolated-GhtfiJ/`.
+- **Distinct from the automated review:** this acceptance does **not** rest on the 2026-11-09
+  `STAGE2_TASK7_S12_ACCEPTANCE_REPORT.md` / `STAGE2_TASK7_S12_FINAL_ACCEPTANCE_REPORT.md`, which are
+  authored as "Buffy (automated acceptance review)" with `Decision: ACCEPTED` and said in §7 that
+  human owner review "may still be warranted". Those reports remain as history; only this dated
+  addendum is new. No historical authorship or date was altered.
+- **Five limitations remain documented and are not resolved by this acceptance:**
+  1. `setVerificationTier` was not exercised in the S-12-only run.
+  2. ~38 non-critical audit call sites were not individually tested.
+  3. Transactional consistency shares its principal assertion with fail-closed registration.
+  4. Overall health-endpoint status and HTTP 200/503 semantics were not tested.
+  5. Verification was SQLite-only.
+- **Not waived by this acceptance:** the migration checksum anomaly (C-2) and any other open risk
+  remain on their own tracks; acceptance neither resolves nor waives them. No application code,
+  test, harness, schema, migration, database row, billing, entitlement or C-03 change was made.
+- `scripts/validate-security-register.mjs` already expects S-12 in the accepted set and an empty
+  pending set; no validator rule was changed or weakened.
