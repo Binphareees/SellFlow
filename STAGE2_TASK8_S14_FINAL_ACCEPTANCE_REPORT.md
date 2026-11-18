@@ -278,3 +278,25 @@ The remaining open audit findings (S-01 through S-13 and S-15) are still tracked
 - The acceptance review is based on the automated verification run on 2026-11-06. A human owner review of the S-14 implementation and evidence may still be warranted before production release.
 - The production server on port 4322 (pid 927563) was not running at the time of this review (cloud restart). The verification was performed against a fresh isolated build served on an ephemeral port, which is the correct verification environment for S-14.
 - S-14 acceptance does not constitute validation approval. Phase 0 validation remains incomplete (per STATE.md), and the audit findings S-01 through S-13 and S-15 remain open except for S-14.
+
+---
+
+## 8. Owner acceptance addendum — 2026-11-18
+
+> **Added 2026-11-18.** Sections 1–7 above are the original automated acceptance review and are **unchanged**: the 2026-11-06 date, the authorship line and the `Decision: ACCEPTED` wording are historical record, not the owner decision. Nothing above is retracted or re-attributed; this addendum only records what happened afterwards.
+
+**Three separate events, three separate records:**
+
+| # | Event | Date | Record |
+|---|-------|------|--------|
+| 1 | Owner **implementation authorization** for Stage 2 Task 8 | 2026-11-05 | Conversation record. No repository artifact stated it at the time; it is now documented in `STATE.md` (S-14 register row, acceptance evidence, provenance caveat and changelog). |
+| 2 | **Automated** acceptance review (this document, §1–§7) | 2026-11-06 | `Reviewer: Buffy (automated acceptance review)`, `Decision: ACCEPTED`. Its own §7 says a human owner review "may still be warranted". Preserved unaltered; **not** an owner acceptance. |
+| 3 | **Owner acceptance decision** | 2026-11-18 | `STATE.md` — S-14 register status *Accepted*, the new acceptance-evidence row, the provenance caveat and the 2026-11-18 changelog entry. |
+
+**Basis of the owner acceptance.** A fresh, independent, isolated verification executed on 2026-11-18 — `node scripts/test-e2e-clean.mjs --skip-build --keep`, harness exit 0 in 222.5 s, **484 API PASS / 0 FAIL / 1 unrelated SKIP** plus 31 PWA PASS, and **38/38 S-14 assertions PASS** with zero S-14 failures. It ran against a disposable `mkdtemp` database (`/tmp/sellflow-e2e-p3jK2o/test.db`), passed both isolation proofs (canary workspace `HARNESS-MWLE2J2U`; `/proc/<pid>/environ` `DATABASE_URL` matched the temp database), and confirmed persisted state (85 sessions / 43 users / 30 revoked / 0 null `lastUsedAt`; `expiresAt − createdAt` = 2,592,000,000 ms = 30 days; `PRAGMA integrity_check` `ok`, 0 FK violations). `prisma/dev.db` was byte-identical before and after (`59d9cb2c6bd8ee65c87479c486c2779fb4d5263a371673c7bf1dd5fd3885592c`, 983,040 bytes) and no commit was created. Retained evidence: `/tmp/sellflow-s14-independent-verification-2026-11-18/` (`06-REPORT.md` plus seven artifacts).
+
+**Why this addendum exists rather than an edit to §1.** The owner acceptance is a decision by the project owner about a finding; the 2026-11-06 decision was an automated review of an implementation. Rewriting §1 would have erased that distinction and misattributed the decision. The superseded 2026-11-06 evidence citations in §2 (notably `/tmp/sf-s14-clean-final9.log`, which no longer exists) are also left in place as history; the 2026-11-18 run supersedes them.
+
+**Explicitly not resolved by this acceptance:** the historical S-14 migration checksum anomaly — `prisma/migrations/20261105060000_session_lifecycle/migration.sql` hashes to `33b41fc743d7eca67b4ecd40465ca23f7f4103aacc9bb0e08bc3c7b3e7528b40` while `_prisma_migrations` records `539bd5b6…` as applied. It remains **OPEN / UNRESOLVED** (standing note C-2 in `A17_A6_IMPLEMENTATION_CLOSEOUT_REPORT.md`; §2 of `PART1_CLOSEOUT_ACCEPTANCE_REPORT.md`). No migration file, checksum or historical record was modified to produce this addendum.
+
+**Scope.** This addendum changes no application code, test, harness, schema, migration, database content or other finding. It is not a validation GO and does not close Phase 0.

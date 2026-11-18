@@ -24,6 +24,13 @@
  * no owner acceptance decision exists in the repository. Implementation
  * authorization (D-019) and passing tests are not acceptance.
  *
+ * 2026-11-18: the project owner formally accepted S-14 on the fresh independent
+ * verification of 2026-11-18 (38/38 S-14 assertions, disposable database,
+ * project database unchanged). S-14 is therefore part of the expected accepted
+ * set and the pending set is empty. The historical migration checksum anomaly
+ * stays open; acceptance does not resolve it, and this validator still requires
+ * the accepted set to match exactly, so no status can drift silently.
+ *
  * Exit code 0 = all checks pass, 1 = at least one failure.
  */
 import { readFileSync } from "node:fs";
@@ -61,13 +68,13 @@ const STATUSES = new Set([
   "Explicitly excluded",
 ]);
 
-const EXPECTED_ACCEPTED = ["S-01", "S-02", "S-12"];
+const EXPECTED_ACCEPTED = ["S-01", "S-02", "S-12", "S-14"];
 
 /**
  * Findings whose evidence exists but whose acceptance is not recorded.
  * A finding listed here must not also be Accepted.
  */
-const EXPECTED_PENDING = ["S-14"];
+const EXPECTED_PENDING = [];
 
 const failures = [];
 const passes = [];
