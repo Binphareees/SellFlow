@@ -10,7 +10,8 @@ no history rewrite, no `db push`, no deletion of untracked files or `prisma/disp
 | **A17** — repair the two failing tests | **PASS** |
 | **A6** — resolve schema drift | **PASS** |
 
-Neither result constitutes owner acceptance.
+Neither result constitutes owner acceptance on its own. Owner acceptance was granted separately on
+2026-11-18 — see *Owner acceptance record* below — and does not alter any evidence in this report.
 
 **Revision 2 — 2026-11-18, documentary correction (audit C-1).** Independent audit
 `A17_A6_INDEPENDENT_ACCEPTANCE_AUDIT.md` finding **A6-F7** established that §2 of the A6 section below
@@ -20,6 +21,39 @@ ordering risk it implies. `docs/MIGRATIONS_S09_PASSWORD_RESET_TOKENS.md` §6 car
 is corrected identically. C-2 and C-3 are recorded as standing audit notes at the end of this document.
 This revision changed **documentation only**: no code, test, migration, schema, database content or Git
 history was modified, and no migration was executed.
+
+**Revision 3 — 2026-11-18, owner acceptance recorded.** The owner's formal acceptance decisions of
+2026-11-18 are recorded in *Owner acceptance record* below and risk item 5 is corrected accordingly.
+Revisions 1 and 2 are preserved unaltered; the historical statement that neither implementation result
+constitutes acceptance on its own remains true, and nothing in this revision re-dates or rewrites the
+evidence to suggest acceptance existed earlier. This revision changed **documentation only**.
+
+---
+
+# OWNER ACCEPTANCE RECORD
+
+Authoritative record of owner decisions, added after the fact. It does not modify the implementation
+evidence above or below, which stands exactly as originally observed.
+
+| Item | Decision | Date | Basis |
+|---|---|---|---|
+| **A17** — test repairs | **ACCEPTED** | 2026-11-18 | Owner decision, recorded verbatim as "A17 — ACCEPTED." |
+| **A6** — schema-drift resolution | **ACCEPTED** | 2026-11-18 | Owner decision, recorded verbatim as "A6 — ACCEPTED." |
+| **S-14** | **Not accepted** | — | These decisions do not confer S-14 acceptance; its provenance concern remains open |
+| **S-12** | **Not accepted** | — | These decisions do not confer S-12 acceptance; its provenance concern remains open |
+| **A6-F9** — pre-DML failure residue | **UNVERIFIED / OPEN RISK** | — | Acceptance of A6 neither resolves nor waives A6-F9 |
+
+Scope limits of these decisions:
+
+- Acceptance covers the **A17** and **A6** workstreams only. It is not a blanket acceptance of the
+  closeout report, of other workstreams, or of the open risks listed at the end of this document.
+- **S-14/S-12 acceptance provenance remains outstanding.** The owner has not accepted either workstream
+  through these decisions, and the evidence for who accepted them and when is still unresolved.
+- **A6-F9 remains UNVERIFIED and open.** Acceptance of A6 is an owner decision about the delivered
+  result, not a finding that pre-DML failure residue is impossible; §2.1 records the experimentally
+  established behaviour and this report continues to carry the risk.
+- **S-02's missing `S02_FINAL_DISPOSITION.md`** is not addressed by these decisions and remains
+  unresolved unless separately established by existing evidence.
 
 ---
 
@@ -293,7 +327,9 @@ Commits are listed in the accompanying message.
    must not reintroduce an inline `UNIQUE`.
 4. `A17` counts are higher than the historical 500 / 484 figures because the PWA suite now runs and an
    assertion was added; the numbers are not comparable across eras without that context.
-5. Owner acceptance is still outstanding for both workstreams and for S-14/S-12 provenance.
+5. **Owner acceptance (updated 2026-11-18):** A17 and A6 were formally **accepted by the owner on
+   2026-11-18** — see *Owner acceptance record*. Acceptance does **not** extend to S-14 or S-12, whose
+   provenance/acceptance concerns remain outstanding, and it does **not** resolve or waive A6-F9 (item 6).
 6. Transactional safety is a property of statement ordering, not a Prisma guarantee (§2.1); a pre-DML
    failure can leave created objects behind (audit A6-F9, UNVERIFIED).
 7. `prisma migrate status` does not detect the historical checksum mismatch (standing note C-2).
