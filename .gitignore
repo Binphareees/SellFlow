@@ -23,3 +23,18 @@ prisma/*.db-journal
 .vscode/
 *.tsbuildinfo
 next-env.d.ts
+
+# dev scratch / generated artifacts
+.cloud-attachments/
+tmp/
+home/
+prisma/disposable_scratch/
+prisma/schema.prisma.tmp
+prisma-generate.log
+*.bak
+*.bak2
+*.bak-*
+_r8_*.py
+_correct_phase*.py
+_s09_*.txt
+SELLFLOW_PROJECT_BUNDLE.*

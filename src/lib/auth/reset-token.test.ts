@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { createResetToken, findResetToken, consumeResetToken } from "@/lib/auth/reset-token";
-import { hashPassword } from "@/lib/auth/password";
+import { createResetToken, findResetToken, consumeResetToken } from "./reset-token";
+import { hashPassword } from "./password";
 
 describe("reset-token helpers", () => {
   let client: PrismaClient;

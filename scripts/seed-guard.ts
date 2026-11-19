@@ -149,3 +149,52 @@ export function assertDemoSeedAllowed(env: NodeJS.ProcessEnv = process.env): voi
   const reason = demoSeedRefusalReason(env);
   if (reason) refuseDemoSeed(reason);
 }
+
+// ---------------------------------------------------------------------------
+// Privileged demo account bootstrap (mediator + platform admin).
+//
+// Ordinary demo seeding (supplier/reseller) is governed by assertDemoSeedAllowed.
+// Creating privileged accounts requires an ADDITIONAL, explicit opt-in so that a
+// routine `SEED_DEMO_DATA=true` run can never silently create a mediator or a
+// platform admin. The opt-in is never applied automatically by any npm script.
+// ---------------------------------------------------------------------------
+const PRIVILEGED_BOOTSTRAP_ENV_NAMES = [
+  "SEED_PRIVILEGED_DEMO_ACCOUNTS",
+  "ALLOW_PRIVILEGED_DEMO_SEED",
+  "SEED_PRIVILEGED_DEMO",
+];
+
+export function isPrivilegedDemoSeedAuthorized(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return PRIVILEGED_BOOTSTRAP_ENV_NAMES.some(
+    (name) => normalise(env[name]) === "true",
+  );
+}
+
+export function privilegedDemoSeedRefusalReason(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  // Privileged bootstrap is a stricter subset of ordinary demo seeding: every
+  // fail-closed rule for ordinary seeding applies first.
+  const demoReason = demoSeedRefusalReason(env);
+  if (demoReason) return demoReason;
+  if (!isPrivilegedDemoSeedAuthorized(env)) {
+    return (
+      "Privileged demo accounts (mediator, platform admin) require explicit " +
+      "authorization. Set SEED_PRIVILEGED_DEMO_ACCOUNTS=true (or " +
+      "ALLOW_PRIVILEGED_DEMO_SEED=true) for this one command; it is never " +
+      "applied automatically."
+    );
+  }
+  return null;
+}
+
+export function assertPrivilegedDemoSeedAllowed(
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const reason = privilegedDemoSeedRefusalReason(env);
+  if (reason) refuseDemoSeed(reason);
+}
+
+export const PRIVILEGED_BOOTSTRAP_ENV_NAMES_EXPORT = PRIVILEGED_BOOTSTRAP_ENV_NAMES;

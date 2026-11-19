@@ -64,6 +64,9 @@ export function AppShell({
           </nav>
 
           <div className="row" style={{ gap: 8 }}>
+            <Link className="btn btn-sm btn-ghost" href="/settings/security">
+              Security
+            </Link>
             <Link className="btn btn-sm btn-ghost" href="/settings/billing">
               Plan
             </Link>

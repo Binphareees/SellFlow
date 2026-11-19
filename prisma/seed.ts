@@ -2,47 +2,130 @@
  * Demo data for local development and automated tests. Every name, price and
  * order here is invented.
  *
- * Four accounts are created (development password documented below):
+ * Ordinary demo accounts (non-privileged):
  *   supplier@sellflow.test  supplier, comped Supplier Pro
  *   reseller@sellflow.test  reseller, Free plan (so the caps can be felt)
+ *
+ * Privileged demo accounts (created ONLY when explicitly authorized):
  *   mediator@sellflow.test  mediator who can see every dispute
  *   admin@sellflow.test     platform admin who confirms manual upgrade transfers
+ *
+ * Ordinary and privileged accounts no longer share a single committed password.
+ * Each group uses its own password, taken from an environment variable when
+ * provided, or generated as a per-seed random value printed once to the console.
+ * No password is committed to the repository.
  *
  * The reseller application is APPROVED and the agreement is ACTIVE, so the
  * private-price path can be exercised end to end. Delete the agreement or set it
  * back to PENDING_ACCEPTANCE to watch the price gate close.
  *
- * This dataset is a DEMO: two of the four accounts are privileged and the
- * password is committed to the repository. It must never run against a
- * production database (audit finding S-15). `assertDemoSeedAllowed` from
- * `scripts/seed-guard.ts` refuses anything but an explicitly confirmed
- * development/test run against a disposable local target, before Prisma
- * connects to the database.
+ * This dataset is a DEMO. `assertDemoSeedAllowed` from `scripts/seed-guard.ts`
+ * refuses anything but an explicitly confirmed development/test run against a
+ * disposable local target, before Prisma connects to the database. Creating the
+ * privileged accounts additionally requires SEED_PRIVILEGED_DEMO_ACCOUNTS=true
+ * (or ALLOW_PRIVILEGED_DEMO_SEED=true); ordinary seeding never creates them.
  *
  * Production initialization is `prisma migrate deploy` plus the pilot
  * onboarding tool (`npm run pilot:seed`), which takes its credentials from the
  * operator and creates no privileged demo account.
+ *
+ * ---------------------------------------------------------------------------
+ * Reversible procedure for already-seeded development databases
+ * ---------------------------------------------------------------------------
+ * This seed NEVER overwrites or promotes an account that already exists
+ * (every upsert uses `update: {}`). It also NEVER deletes or mutates existing
+ * rows automatically. If an earlier seed created privileged demo accounts in a
+ * development database, remove them manually before any pilot use:
+ *
+ *   1. Confirm the rows exist:
+ *        SELECT id, email, isPlatformAdmin FROM "User"
+ *        WHERE email IN ('mediator@sellflow.test','admin@sellflow.test');
+ *
+ *   2. Delete dependent rows first, then the accounts, in a single transaction:
+ *        BEGIN;
+ *        DELETE FROM "AuditLog"        WHERE "actorProfileId" IN (SELECT id FROM "Profile" WHERE "userId" IN (SELECT id FROM "User" WHERE email IN ('mediator@sellflow.test','admin@sellflow.test')));
+ *        DELETE FROM "ProfileRole"     WHERE "profileId"     IN (SELECT id FROM "Profile" WHERE "userId" IN (SELECT id FROM "User" WHERE email IN ('mediator@sellflow.test','admin@sellflow.test')));
+ *        DELETE FROM "Subscription"   WHERE "workspaceId"    IN (SELECT id FROM "BusinessWorkspace" WHERE "ownerProfileId" IN (SELECT id FROM "Profile" WHERE "userId" IN (SELECT id FROM "User" WHERE email IN ('mediator@sellflow.test','admin@sellflow.test'))));
+ *        DELETE FROM "BusinessWorkspace" WHERE "ownerProfileId" IN (SELECT id FROM "Profile" WHERE "userId" IN (SELECT id FROM "User" WHERE email IN ('mediator@sellflow.test','admin@sellflow.test')));
+ *        DELETE FROM "Profile"        WHERE "userId"         IN (SELECT id FROM "User" WHERE email IN ('mediator@sellflow.test','admin@sellflow.test'));
+ *        DELETE FROM "User"           WHERE email            IN ('mediator@sellflow.test','admin@sellflow.test');
+ *        COMMIT;
+ *
+ *   3. Alternatively, rotate their passwords through the password-reset flow
+ *      and disable the accounts; this seed will not recreate or promote them.
+ *
+ *   4. Verify removal with the query in step 1 (expect 0 rows).
+ *
+ *   5. For a fully clean state, prefer a fresh disposable database:
+ *        NODE_ENV=development SEED_DEMO_DATA=true DATABASE_URL=file:/tmp/... npm run db:reset
  */
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
-import { assertDemoSeedAllowed } from "../scripts/seed-guard";
+import { randomBytes } from "node:crypto";
+import {
+  assertDemoSeedAllowed,
+  assertPrivilegedDemoSeedAllowed,
+  isPrivilegedDemoSeedAuthorized,
+} from "../scripts/seed-guard";
 
 assertDemoSeedAllowed();
 
+const privilegedBootstrapRequested = isPrivilegedDemoSeedAuthorized();
+if (privilegedBootstrapRequested) {
+  assertPrivilegedDemoSeedAllowed();
+}
+
 const prisma = new PrismaClient();
-const PASSWORD = "Password123!";
+
+const ORDINARY_PASSWORD_ENV_NAMES = [
+  "DEMO_SEED_PASSWORD",
+  "DEMO_ACCOUNT_PASSWORD",
+  "DEMO_PASSWORD",
+];
+
+const PRIVILEGED_PASSWORD_ENV_NAMES = [
+  "PRIVILEGED_DEMO_PASSWORD",
+  "DEMO_PRIVILEGED_PASSWORD",
+  "ADMIN_DEMO_PASSWORD",
+  "MEDIATOR_DEMO_PASSWORD",
+];
+
+function resolveSeedPassword(envNames: string[], label: string): string {
+  for (const name of envNames) {
+    const value = process.env[name];
+    if (value && value.trim()) return value.trim();
+  }
+  const generated = randomBytes(18).toString("base64url");
+  console.log(
+    `Generated ${label} password (shown once, not committed): ${generated}`,
+  );
+  console.log("Store it securely; this value will not be printed again.");
+  return generated;
+}
+
 const naira = (value: number) => value * 100;
 
 async function main() {
   console.log("Seeding SellFlow demo data…");
 
-  const passwordHash = await bcrypt.hash(PASSWORD, 10);
+  const ordinaryPasswordHash = await bcrypt.hash(
+    resolveSeedPassword(ORDINARY_PASSWORD_ENV_NAMES, "ordinary demo account"),
+    10,
+  );
+
+  let privilegedPasswordHash: string | null = null;
+  if (privilegedBootstrapRequested) {
+    privilegedPasswordHash = await bcrypt.hash(
+      resolveSeedPassword(PRIVILEGED_PASSWORD_ENV_NAMES, "privileged demo account"),
+      10,
+    );
+  }
 
   // ── Supplier account ──────────────────────────────────────────────────────
   const supplierUser = await prisma.user.upsert({
     where: { email: "supplier@sellflow.test" },
     update: {},
-    create: { email: "supplier@sellflow.test", passwordHash, emailVerifiedAt: new Date() },
+    create: { email: "supplier@sellflow.test", passwordHash: ordinaryPasswordHash, emailVerifiedAt: new Date() },
   });
 
   const supplierProfile = await prisma.profile.upsert({
@@ -96,7 +179,7 @@ async function main() {
   const resellerUser = await prisma.user.upsert({
     where: { email: "reseller@sellflow.test" },
     update: {},
-    create: { email: "reseller@sellflow.test", passwordHash, emailVerifiedAt: new Date() },
+    create: { email: "reseller@sellflow.test", passwordHash: ordinaryPasswordHash, emailVerifiedAt: new Date() },
   });
 
   const resellerProfile = await prisma.profile.upsert({
@@ -371,45 +454,48 @@ async function main() {
     console.log(`  application ${application.id.slice(0, 6)}… approved for ${seed.title}`);
   }
 
-  // ── Mediator account ──────────────────────────────────────────────────────
-  const mediatorUser = await prisma.user.upsert({
-    where: { email: "mediator@sellflow.test" },
-    update: {},
-    create: { email: "mediator@sellflow.test", passwordHash, emailVerifiedAt: new Date() },
-  });
-
-  const mediatorProfile = await prisma.profile.upsert({
-    where: { userId: mediatorUser.id },
-    update: {},
-    create: {
-      userId: mediatorUser.id,
-      displayName: "Tunde Balogun",
-      phone: "2348053334455",
-      city: "Abuja",
-      state: "FCT",
-      verificationTier: 3,
-      tierUpdatedAt: new Date(),
-    },
-  });
-
-  for (const role of ["BUSINESS_OWNER", "MEDIATOR"]) {
-    await prisma.profileRole.upsert({
-      where: { profileId_role: { profileId: mediatorProfile.id, role } },
+  // ── Mediator account (privileged bootstrap only) ─────────────────────────
+  let mediatorProfile: any = null;
+  if (privilegedBootstrapRequested && privilegedPasswordHash) {
+    const mediatorUser = await prisma.user.upsert({
+      where: { email: "mediator@sellflow.test" },
       update: {},
-      create: { profileId: mediatorProfile.id, role },
+      create: { email: "mediator@sellflow.test", passwordHash: privilegedPasswordHash, emailVerifiedAt: new Date() },
+    });
+
+    mediatorProfile = await prisma.profile.upsert({
+      where: { userId: mediatorUser.id },
+      update: {},
+      create: {
+        userId: mediatorUser.id,
+        displayName: "Tunde Balogun",
+        phone: "2348053334455",
+        city: "Abuja",
+        state: "FCT",
+        verificationTier: 3,
+        tierUpdatedAt: new Date(),
+      },
+    });
+
+    for (const role of ["BUSINESS_OWNER", "MEDIATOR"]) {
+      await prisma.profileRole.upsert({
+        where: { profileId_role: { profileId: mediatorProfile.id, role } },
+        update: {},
+        create: { profileId: mediatorProfile.id, role },
+      });
+    }
+
+    await prisma.businessWorkspace.upsert({
+      where: { ownerProfileId: mediatorProfile.id },
+      update: {},
+      create: {
+        ownerProfileId: mediatorProfile.id,
+        name: "SellFlow Mediation Desk",
+        city: "Abuja",
+        whatsappNumber: "2348053334455",
+      },
     });
   }
-
-  await prisma.businessWorkspace.upsert({
-    where: { ownerProfileId: mediatorProfile.id },
-    update: {},
-    create: {
-      ownerProfileId: mediatorProfile.id,
-      name: "SellFlow Mediation Desk",
-      city: "Abuja",
-      whatsappNumber: "2348053334455",
-    },
-  });
 
   // ── One live dispute so the mediator queue is not empty ───────────────────
   const demoOrderNumber = "SO-2610-0001";
@@ -538,61 +624,60 @@ async function main() {
     });
   }
 
-  // ── Platform admin (confirms manual upgrade transfers) ────────────────────
-  // Never elevate an account that already exists: the seed creates the demo
-  // admin, it does not promote whatever happens to own that address.
-  const adminUser = await prisma.user.upsert({
-    where: { email: "admin@sellflow.test" },
-    update: {},
-    create: {
-      email: "admin@sellflow.test",
-      passwordHash,
-      emailVerifiedAt: new Date(),
-      isPlatformAdmin: true,
-    },
-  });
+  // ── Platform admin (confirms manual upgrade transfers) — privileged only ─
+  if (privilegedBootstrapRequested && privilegedPasswordHash) {
+    // Never elevate an account that already exists: the seed creates the demo
+    // admin, it does not promote whatever happens to own that address.
+    const adminUser = await prisma.user.upsert({
+      where: { email: "admin@sellflow.test" },
+      update: {},
+      create: {
+        email: "admin@sellflow.test",
+        passwordHash: privilegedPasswordHash,
+        emailVerifiedAt: new Date(),
+        isPlatformAdmin: true,
+      },
+    });
 
-  const adminProfile = await prisma.profile.upsert({
-    where: { userId: adminUser.id },
-    update: {},
-    create: {
-      userId: adminUser.id,
-      displayName: "SellFlow Ops",
-      phone: "2348000000000",
-      city: "Lagos",
-      state: "Lagos",
-      verificationTier: 3,
-      tierUpdatedAt: new Date(),
-    },
-  });
+    const adminProfile = await prisma.profile.upsert({
+      where: { userId: adminUser.id },
+      update: {},
+      create: {
+        userId: adminUser.id,
+        displayName: "SellFlow Ops",
+        phone: "2348000000000",
+        city: "Lagos",
+        state: "Lagos",
+        verificationTier: 3,
+        tierUpdatedAt: new Date(),
+      },
+    });
 
-  await prisma.profileRole.upsert({
-    where: { profileId_role: { profileId: adminProfile.id, role: "BUSINESS_OWNER" } },
-    update: {},
-    create: { profileId: adminProfile.id, role: "BUSINESS_OWNER" },
-  });
+    await prisma.profileRole.upsert({
+      where: { profileId_role: { profileId: adminProfile.id, role: "BUSINESS_OWNER" } },
+      update: {},
+      create: { profileId: adminProfile.id, role: "BUSINESS_OWNER" },
+    });
 
-  const adminWorkspace = await prisma.businessWorkspace.upsert({
-    where: { ownerProfileId: adminProfile.id },
-    update: {},
-    create: {
-      ownerProfileId: adminProfile.id,
-      name: "SellFlow Operations",
-      city: "Lagos",
-      whatsappNumber: "2348000000000",
-    },
-  });
+    const adminWorkspace = await prisma.businessWorkspace.upsert({
+      where: { ownerProfileId: adminProfile.id },
+      update: {},
+      create: {
+        ownerProfileId: adminProfile.id,
+        name: "SellFlow Operations",
+        city: "Lagos",
+        whatsappNumber: "2348000000000",
+      },
+    });
 
-  await prisma.subscription.upsert({
-    where: { workspaceId: adminWorkspace.id },
-    update: {},
-    create: { workspaceId: adminWorkspace.id, tier: "FREE", status: "ACTIVE" },
-  });
+    await prisma.subscription.upsert({
+      where: { workspaceId: adminWorkspace.id },
+      update: {},
+      create: { workspaceId: adminWorkspace.id, tier: "FREE", status: "ACTIVE" },
+    });
+  }
 
   // ── Audit trail ──────────────────────────────────────────────────────────
-  // The audited database shipped with an empty AuditLog while seeded activity
-  // existed, which made working auditing look broken (S-12). Seed a short,
-  // representative trail. Fixed ids keep re-running the seed idempotent.
   const seededAuditRows = [
     {
       id: "seed-audit-login-reseller",
@@ -632,15 +717,15 @@ async function main() {
     },
   ];
 
-  // Upsert per row: the audit trail is append-only, so re-seeding never rewrites
-  // or deletes an existing entry, it only fills in what is missing.
   for (const row of seededAuditRows) {
     await prisma.auditLog.upsert({ where: { id: row.id }, update: {}, create: row });
   }
 
-  // Credentials are intentionally not printed: this output ends up in CI logs
-  // and shell scrollback. They are documented in this file for local use only.
-  console.log("Done. Four demo accounts and a demo audit trail created for local development.");
+  if (privilegedBootstrapRequested) {
+    console.log("Done. Four demo accounts (ordinary + privileged bootstrap) and a demo audit trail created for local development.");
+  } else {
+    console.log("Done. Ordinary demo accounts (supplier, reseller) and demo data created. Privileged bootstrap SKIPPED: set SEED_PRIVILEGED_DEMO_ACCOUNTS=true to create mediator/admin.");
+  }
 }
 
 main()

@@ -64,6 +64,10 @@ export function LoginForm({ next }: { next?: string }) {
       </button>
 
       <p className="tiny muted" style={{ textAlign: "center" }}>
+        <Link href="/reset-password">Forgot password?</Link>
+      </p>
+
+      <p className="tiny muted" style={{ textAlign: "center" }}>
         New here? <Link href="/register">Create an account</Link>
       </p>
     </form>
@@ -182,6 +186,248 @@ export function RegisterForm() {
       <p className="tiny muted" style={{ textAlign: "center" }}>
         Already have an account? <Link href="/login">Sign in</Link>
       </p>
+    </form>
+  );
+}
+
+export function ResetPasswordForm({ token }: { token?: string }) {
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+
+  const isReset = Boolean(token);
+
+  async function requestReset(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    setFieldErrors({});
+    const result = await apiFetch<{ ok: true; message?: string }>(
+      "/api/auth/password-reset/request",
+      { method: "POST", body: { email } },
+    );
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error);
+      setFieldErrors(result.details ?? {});
+      return;
+    }
+    setDone(
+      result.data.message ??
+        "If that email belongs to an account, we sent a reset link.",
+    );
+  }
+
+  async function completeReset(event: React.FormEvent) {
+    event.preventDefault();
+    setError(null);
+    setFieldErrors({});
+    if (password !== confirm) {
+      setFieldErrors({ confirm: "Passwords do not match" });
+      return;
+    }
+    setBusy(true);
+    const result = await apiFetch<{ ok: true; message?: string }>(
+      "/api/auth/password-reset/reset",
+      { method: "POST", body: { token, password } },
+    );
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error);
+      setFieldErrors(result.details ?? {});
+      return;
+    }
+    setDone(result.data.message ?? "Your password was updated. Sign in to continue.");
+  }
+
+  if (done) {
+    return (
+      <div className="stack">
+        <div className="notice">{done}</div>
+        <p className="tiny muted" style={{ textAlign: "center" }}>
+          <Link href="/login">Sign in</Link>
+        </p>
+      </div>
+    );
+  }
+
+  if (isReset) {
+    return (
+      <form className="stack" onSubmit={completeReset}>
+        {error ? <div className="form-error">{error}</div> : null}
+        <div className="field">
+          <label htmlFor="password">New password</label>
+          <input
+            id="password"
+            type="password"
+            autoComplete="new-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            minLength={8}
+          />
+          {fieldErrors.password ? (
+            <span className="error-text">{fieldErrors.password}</span>
+          ) : (
+            <span className="hint">At least 8 characters.</span>
+          )}
+        </div>
+        <div className="field">
+          <label htmlFor="confirm">Confirm new password</label>
+          <input
+            id="confirm"
+            type="password"
+            autoComplete="new-password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            required
+          />
+          {fieldErrors.confirm ? (
+            <span className="error-text">{fieldErrors.confirm}</span>
+          ) : null}
+        </div>
+        <button className="btn btn-primary btn-block" disabled={busy} type="submit">
+          {busy ? "Updating…" : "Set new password"}
+        </button>
+        <p className="tiny muted" style={{ textAlign: "center" }}>
+          <Link href="/login">Back to sign in</Link>
+        </p>
+      </form>
+    );
+  }
+
+  return (
+    <form className="stack" onSubmit={requestReset}>
+      {error ? <div className="form-error">{error}</div> : null}
+      <p className="tiny muted">
+        Enter your email and we will send a reset link if an account exists.
+      </p>
+      <div className="field">
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          type="email"
+          inputMode="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+        />
+        {fieldErrors.email ? (
+          <span className="error-text">{fieldErrors.email}</span>
+        ) : null}
+      </div>
+      <button className="btn btn-primary btn-block" disabled={busy} type="submit">
+        {busy ? "Sending…" : "Send reset link"}
+      </button>
+      <p className="tiny muted" style={{ textAlign: "center" }}>
+        <Link href="/login">Back to sign in</Link>
+      </p>
+    </form>
+  );
+}
+
+export function ChangePasswordForm() {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setError(null);
+    setFieldErrors({});
+    if (newPassword !== confirm) {
+      setFieldErrors({ confirm: "Passwords do not match" });
+      return;
+    }
+    setBusy(true);
+    const result = await apiFetch<{ ok: true; message?: string }>(
+      "/api/auth/password/change",
+      {
+        method: "POST",
+        body: { currentPassword, newPassword },
+      },
+    );
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error);
+      setFieldErrors(result.details ?? {});
+      return;
+    }
+    setDone(result.data.message ?? "Your password was updated.");
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirm("");
+  }
+
+  if (done) {
+    return (
+      <div className="stack">
+        <div className="notice">{done}</div>
+      </div>
+    );
+  }
+
+  return (
+    <form className="stack" onSubmit={submit}>
+      {error ? <div className="form-error">{error}</div> : null}
+      <div className="field">
+        <label htmlFor="currentPassword">Current password</label>
+        <input
+          id="currentPassword"
+          type="password"
+          autoComplete="current-password"
+          value={currentPassword}
+          onChange={(e) => setCurrentPassword(e.target.value)}
+          required
+        />
+        {fieldErrors.currentPassword ? (
+          <span className="error-text">{fieldErrors.currentPassword}</span>
+        ) : null}
+      </div>
+      <div className="field">
+        <label htmlFor="newPassword">New password</label>
+        <input
+          id="newPassword"
+          type="password"
+          autoComplete="new-password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          required
+          minLength={8}
+        />
+        {fieldErrors.newPassword ? (
+          <span className="error-text">{fieldErrors.newPassword}</span>
+        ) : (
+          <span className="hint">At least 8 characters.</span>
+        )}
+      </div>
+      <div className="field">
+        <label htmlFor="confirmPassword">Confirm new password</label>
+        <input
+          id="confirmPassword"
+          type="password"
+          autoComplete="new-password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          required
+        />
+        {fieldErrors.confirm ? (
+          <span className="error-text">{fieldErrors.confirm}</span>
+        ) : null}
+      </div>
+      <button className="btn btn-primary btn-block" disabled={busy} type="submit">
+        {busy ? "Updating…" : "Change password"}
+      </button>
     </form>
   );
 }

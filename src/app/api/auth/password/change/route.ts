@@ -1,11 +1,14 @@
 import { route, readBody, json, unauthorized, conflict } from "@/lib/api";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireAuth } from "@/lib/auth/session";
+import {
+  applySessionCookie,
+  requireAuth,
+  rotateSessionForUser,
+  sessionMeta,
+} from "@/lib/auth/session";
 import { verifyPassword, hashPassword, PASSWORD_RULES } from "@/lib/auth/password";
-import { revokeOtherSessionsForUser } from "@/lib/auth/revocation";
-import { audit } from "@/lib/audit";
-import { AUDIT } from "@/lib/audit";
+import { auditCritical, AUDIT } from "@/lib/audit";
 
 const CHANGE_FIELDS = z.object({
   currentPassword: z.string().min(1, "Current password is required"),
@@ -37,7 +40,7 @@ export const POST = route(async (request: Request) => {
     throw conflict("Your new password must be different from your current password.");
   }
 
-  await prisma.$transaction(async (tx) => {
+  const rotated = await prisma.$transaction(async (tx) => {
     const newHash = await hashPassword(body.newPassword);
 
     await tx.user.update({
@@ -45,27 +48,33 @@ export const POST = route(async (request: Request) => {
       data: { passwordHash: newHash },
     });
 
-    // Revoke every other session so the old password is no longer usable
-    // elsewhere. The current session is rotated separately so the caller keeps a
-    // valid session cookie after the change.
-    await tx.session.updateMany({
-      where: { userId: user.id, revokedAt: null, id: { not: auth.sessionId } },
-      data: { revokedAt: new Date() },
-    });
+    // The audit row commits with the password update and the session change. It
+    // must be written through `tx`: the shared client would open a second
+    // connection and block on SQLite's write lock until this interactive
+    // transaction expired (P2028). auditCritical fails closed, so a lost trail
+    // aborts the change instead of reporting an unprovable success.
+    await auditCritical(
+      {
+        actorProfileId: auth.profile.id,
+        action: AUDIT.PASSWORD_CHANGED,
+        entityType: "User",
+        entityId: user.id,
+        metadata: { newPasswordSet: true },
+        ipHash: undefined,
+      },
+      { client: tx },
+    );
 
-    await audit({
-      actorProfileId: auth.profile.id,
-      action: AUDIT.PASSWORD_CHANGED,
-      entityType: "User",
-      entityId: user.id,
-      metadata: { newPasswordSet: true },
-      ipHash: undefined,
-    });
+    // Every live session — including the caller's — is retired and replaced in
+    // this same transaction, so a replayed cookie cannot outlive the password
+    // change. The new cookie is attached only after the commit succeeds.
+    return rotateSessionForUser(user.id, sessionMeta(request), tx);
   });
 
-  // Rotate the current session so a reused session cookie cannot survive the
-  // password change.
-  await revokeOtherSessionsForUser(auth.user.id, auth.sessionId);
-
-  return json({ ok: true, message: "Your password was updated. This session was refreshed." });
+  const response = json({
+    ok: true,
+    message: "Your password was updated. This session was refreshed.",
+  });
+  applySessionCookie(response, rotated.token, rotated.expiresAt);
+  return response;
 });

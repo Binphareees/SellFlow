@@ -1,11 +1,9 @@
-import { route, readBody, json, badRequest, unauthorized, conflict } from "@/lib/api";
+import { route, readBody, json, unauthorized, conflict } from "@/lib/api";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { findResetToken, consumeResetToken } from "@/lib/auth/reset-token";
 import { hashPassword, verifyPassword, PASSWORD_RULES } from "@/lib/auth/password";
-import { revokeOtherSessionsForUser } from "@/lib/auth/revocation";
-import { audit } from "@/lib/audit";
-import { AUDIT } from "@/lib/audit";
+import { auditCritical, AUDIT } from "@/lib/audit";
 
 const RESET_FIELDS = z.object({
   token: z.string().min(1, "Reset token is required"),
@@ -61,17 +59,25 @@ export const POST = route(async (request: Request) => {
       data: { revokedAt: new Date() },
     });
 
-    await audit({
-      actorProfileId: undefined,
-      action: AUDIT.PASSWORD_RESET,
-      entityType: "User",
-      entityId: user.id,
-      metadata: {
-        resetTokenUsed: true,
-        // Never include the raw token or hashed token in audit metadata.
+    // The audit row commits with the password update, the token consumption and
+    // the session revocation. It must be written through `tx`: the shared client
+    // would open a second connection and block on SQLite's write lock until this
+    // interactive transaction expired (P2028). auditCritical fails closed, so a
+    // lost trail aborts the reset instead of reporting an unprovable success.
+    await auditCritical(
+      {
+        actorProfileId: undefined,
+        action: AUDIT.PASSWORD_RESET,
+        entityType: "User",
+        entityId: user.id,
+        metadata: {
+          resetTokenUsed: true,
+          // Never include the raw token or hashed token in audit metadata.
+        },
+        ipHash: undefined,
       },
-      ipHash: undefined,
-    });
+      { client: tx },
+    );
   });
 
   return json({ ok: true, message: "Your password was updated. Sign in to continue." });
