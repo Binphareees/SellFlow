@@ -974,7 +974,7 @@ export async function confirmStock(
         include: { items: true },
       });
       if (!order) throw notFound("Supplier order not found");
-      if (!["SUBMITTED", "STOCK_CONFIRMED"].includes(order.status)) {
+      if (order.status !== "SUBMITTED") {
         throw conflict(`Stock cannot be changed while the order is ${order.status}`);
       }
 
@@ -1133,9 +1133,18 @@ export async function recordPaymentClaim(
     include: { supplierProfile: { select: { profileId: true } } },
   });
   if (!order) throw notFound("Supplier order not found");
+  // D2: terminal orders cannot receive new payment claims.
+  if (["COMPLETED", "CANCELLED", "DISPUTED"].includes(order.status)) {
+    throw conflict(`Payment claims cannot be recorded while the order is ${order.status}`);
+  }
   const isSupplier = order.supplierProfile.profileId === profileId;
   const isReseller = order.resellerProfileId === profileId;
   if (!isSupplier && !isReseller) throw forbidden();
+  // D1: a profile acting as both parties on the same order cannot record a
+  // claim for either side (self-dealing).
+  if (isSupplier && isReseller) {
+    throw forbidden("You cannot record a payment claim on your own order as both parties");
+  }
 
   // The initial state belongs to the authenticated actor, not to the request
   // body (audit finding S-03). A reseller can only declare "sent"; a supplier
@@ -1199,6 +1208,10 @@ export async function decidePaymentClaim(
   const isSupplier = order.supplierProfile.profileId === profileId;
   const isReseller = order.resellerProfileId === profileId;
   if (!isSupplier && !isReseller) throw forbidden();
+  // D1: a profile acting as both parties cannot decide its own claim.
+  if (isSupplier && isReseller) {
+    throw forbidden("You cannot decide a payment claim on your own order as both parties");
+  }
 
   // Only the counterparty may confirm: a reseller's claim is confirmed by the supplier.
   const claimantIsSupplier = claim.claimedByRole === ROLE.SUPPLIER;
@@ -1242,12 +1255,24 @@ export async function decidePaymentClaim(
       // transactionally coupled and rolls back with the dispute if it does not
       // match the expected previous state.
       if (current.supplierOrderId) {
+        // D3: do not revert DISPATCHED/DELIVERED orders to DISPUTED; only the
+        // payment-claim status moves, so fulfilment progress is preserved.
+        const currentOrder = await tx.supplierOrder.findUnique({
+          where: { id: current.supplierOrderId },
+          select: { status: true },
+        });
+        const preserveStatus =
+          currentOrder?.status === "DISPATCHED" ||
+          currentOrder?.status === "DELIVERED";
         const orderUpdated = await tx.supplierOrder.updateMany({
           where: {
             id: current.supplierOrderId,
             paymentClaimStatus: current.status,
           },
-          data: { paymentClaimStatus: "DISPUTED", status: "DISPUTED" },
+          data: {
+            paymentClaimStatus: "DISPUTED",
+            ...(preserveStatus ? {} : { status: "DISPUTED" }),
+          },
         });
         if (orderUpdated.count === 0) {
           // The order already moved away from the expected previous claim state;
@@ -1277,11 +1302,17 @@ export async function decidePaymentClaim(
     .filter((c) => c.status === "CONFIRMED")
     .reduce((s, c) => s + c.amountKobo, 0) + claim.amountKobo;
 
+  // D7: cap confirmed total at order total.
+  if (confirmedTotal > order.totalKobo) {
+    throw badRequest("Confirmed amount exceeds the order total");
+  }
+
   const newClaimStatus = confirmedTotal >= order.totalKobo ? "CONFIRMED" : "PARTIALLY_CONFIRMED";
 
-  await prisma.$transaction(async (tx) => {
-    await tx.paymentStatusClaim.update({
-      where: { id: claimId },
+  // D4: atomic confirm with fail-closed audit, mirroring the dispute path.
+  const result = await prisma.$transaction(async (tx) => {
+    const claimUpdated = await tx.paymentStatusClaim.updateMany({
+      where: { id: claimId, status: { in: ["SENT", "RECEIVED"] } },
       data: {
         status: newClaimStatus === "CONFIRMED" ? "CONFIRMED" : "PARTIAL",
         confirmedAt: new Date(),
@@ -1289,6 +1320,9 @@ export async function decidePaymentClaim(
         note: input.note ?? claim.note,
       },
     });
+    if (claimUpdated.count !== 1) {
+      throw conflict("This claim has already been decided");
+    }
     await tx.supplierOrder.update({
       where: { id: orderId },
       data: {
@@ -1299,17 +1333,20 @@ export async function decidePaymentClaim(
             : order.status,
       },
     });
+    await auditCritical(
+      {
+        actorProfileId: profileId,
+        action: AUDIT.CLAIM_CONFIRMED,
+        entityType: "PaymentStatusClaim",
+        entityId: claimId,
+        metadata: { orderId, confirmedTotal, newClaimStatus },
+      },
+      { client: tx },
+    );
+    return { disputed: false, paymentClaimStatus: newClaimStatus };
   });
 
-  await audit({
-    actorProfileId: profileId,
-    action: AUDIT.CLAIM_CONFIRMED,
-    entityType: "PaymentStatusClaim",
-    entityId: claimId,
-    metadata: { orderId, confirmedTotal, newClaimStatus },
-  });
-
-  return { disputed: false, paymentClaimStatus: newClaimStatus };
+  return result;
 }
 
 export async function dispatchOrder(
@@ -1413,6 +1450,7 @@ const SUPPLIER_STATUS_EDGES: Record<string, readonly string[]> = {
   STOCK_DECLINED: ["CANCELLED"],
   STOCK_CONFIRMED: ["AWAITING_PAYMENT", "CANCELLED"],
   AWAITING_PAYMENT: ["CANCELLED"],
+  PAID: ["CANCELLED"],
   DELIVERED: ["COMPLETED"],
 };
 
