@@ -28,6 +28,23 @@ export function createRawToken(): string {
 }
 
 /**
+ * Invalidate every unused reset token for an account (S-09).
+ *
+ * Called before a new token is issued so only one reset link can ever be active
+ * for an account. Accepts the shared client or an interactive transaction client
+ * so invalidation and issuance can share one commit.
+ */
+export async function invalidateUnusedResetTokens(
+  userId: string,
+  client: PrismaClient | Prisma.TransactionClient = prisma,
+): Promise<void> {
+  await client.passwordResetToken.updateMany({
+    where: { userId, used: false },
+    data: { used: true },
+  });
+}
+
+/**
  * Create a reset token for an account.
  *
  * Returns the raw token (one-time use) and the created database row. The raw token
@@ -37,12 +54,13 @@ export function createRawToken(): string {
 export async function createResetToken(
   userId: string,
   expiresInMs = 60 * 60 * 1000,
+  client: PrismaClient | Prisma.TransactionClient = prisma,
 ): Promise<{ rawToken: string; record: ResetTokenRecord }> {
   const rawToken = createRawToken();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + expiresInMs);
 
-  const record = await prisma.passwordResetToken.create({
+  const record = await client.passwordResetToken.create({
     data: {
       userId,
       hashedToken: hashToken(rawToken),

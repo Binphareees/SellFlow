@@ -167,4 +167,6 @@ export const AUDIT = {
   DISPUTE_RESOLVED: "dispute.resolved",
   PASSWORD_RESET: "auth.password_reset",
   PASSWORD_CHANGED: "auth.password_changed",
+  PASSWORD_RESET_REQUESTED: "auth.password_reset_requested",
+  PASSWORD_RESET_REQUEST_THROTTLED: "auth.password_reset_request_throttled",
 } as const;

@@ -142,6 +142,20 @@ model LoginThrottle {
   @@index([lockedUntil])
 }
 
+model PasswordResetThrottle {
+  id              String    @id @default(cuid())
+  scope           String // PASSWORD_RESET_ACCOUNT | PASSWORD_RESET_IP
+  key             String // salted hash of the normalized email or validated IP
+  failures        Int       @default(0)
+  windowStartedAt DateTime
+  lockedUntil     DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([scope, key])
+  @@index([updatedAt])
+  @@index([lockedUntil])
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Business workspace: customers, products, orders, manual money
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,9 +1,16 @@
 import { route, readBody, json } from "@/lib/api";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { createResetToken } from "@/lib/auth/reset-token";
+import { createResetToken, invalidateUnusedResetTokens } from "@/lib/auth/reset-token";
 import { sendTemplatedEmail } from "@/lib/resend";
 import { applicationOrigin } from "@/lib/app-origin";
+import { clientIp } from "@/lib/auth/client-ip";
+import { hashIp } from "@/lib/auth/session";
+import {
+  checkResetRequestThrottle,
+  recordResetRequestAttempt,
+} from "@/lib/auth/reset-request-throttle";
+import { audit, AUDIT } from "@/lib/audit";
 
 const RESET_REQUEST_FIELDS = z.object({
   email: z
@@ -26,11 +33,8 @@ const RESET_REQUEST_FIELDS = z.object({
 export const POST = route(async (request: Request) => {
   const body = await readBody(request, RESET_REQUEST_FIELDS);
   const email = body.email;
-
-  const user = await prisma.user.findUnique({
-    where: { email },
-    select: { id: true },
-  });
+  const ip = clientIp(request);
+  const ipHash = hashIp(ip);
 
   // Always return the same generic response for a valid request.
   const response = json({
@@ -38,12 +42,56 @@ export const POST = route(async (request: Request) => {
     message: "If that email belongs to an account, we sent a reset link.",
   });
 
+  const before = await checkResetRequestThrottle(email, ip);
+  if (before.locked) {
+    await audit({
+      actorProfileId: undefined,
+      action: AUDIT.PASSWORD_RESET_REQUEST_THROTTLED,
+      entityType: "User",
+      entityId: "password-reset-request",
+      metadata: { throttled: true, issued: false },
+      ipHash,
+    });
+    return response;
+  }
+
+  const attempt = await recordResetRequestAttempt(email, ip);
+  if (attempt.locked) {
+    await audit({
+      actorProfileId: undefined,
+      action: AUDIT.PASSWORD_RESET_REQUEST_THROTTLED,
+      entityType: "User",
+      entityId: "password-reset-request",
+      metadata: { throttled: true, issued: false },
+      ipHash,
+    });
+    return response;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true },
+  });
+
   if (!user) {
+    await audit({
+      actorProfileId: undefined,
+      action: AUDIT.PASSWORD_RESET_REQUESTED,
+      entityType: "User",
+      entityId: "password-reset-request",
+      metadata: { issued: false, accountExists: false },
+      ipHash,
+    });
     return response;
   }
 
   try {
-    const { rawToken } = await createResetToken(user.id);
+    const { rawToken } = await prisma.$transaction(async (tx) => {
+      // Only one unused reset token may be active for an account at a time.
+      await invalidateUnusedResetTokens(user.id, tx);
+      return createResetToken(user.id, undefined, tx);
+    });
+
     const origin = applicationOrigin(request);
     const resetUrl = origin
       ? `${origin}/reset-password?token=${encodeURIComponent(rawToken)}`
@@ -66,6 +114,15 @@ export const POST = route(async (request: Request) => {
       // must not change the enumeration-resistant response.
       return response;
     }
+
+    await audit({
+      actorProfileId: undefined,
+      action: AUDIT.PASSWORD_RESET_REQUESTED,
+      entityType: "User",
+      entityId: user.id,
+      metadata: { issued: true, accountExists: true },
+      ipHash,
+    });
   } catch (tokenError) {
     console.error("[auth] password reset token creation failed", tokenError);
     return response;
