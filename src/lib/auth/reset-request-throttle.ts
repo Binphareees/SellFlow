@@ -207,7 +207,7 @@ async function withSqliteRetry<T>(
   throw lastError;
 }
 
-async function pruneResetRequestThrottle(
+export async function pruneResetRequestThrottle(
   now: Date,
   config: ThrottleConfig,
 ): Promise<void> {
