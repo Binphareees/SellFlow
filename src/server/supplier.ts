@@ -1530,6 +1530,74 @@ export async function setSupplierOrderStatus(
   return result.order;
 }
 
+export async function releaseHeldSupplierStock(
+  orderId: string,
+  profileId: string,
+  isAdmin: boolean = false,
+) {
+  if (!isAdmin) {
+    throw forbidden("Only a platform owner or mediator can release held stock");
+  }
+
+  return withStockTransaction(() =>
+    prisma.$transaction(async (tx) => {
+      const order = await tx.supplierOrder.findUnique({
+        where: { id: orderId },
+        include: { items: true },
+      });
+      if (!order) throw notFound("Supplier order not found");
+
+      // Idempotent: nothing to do when this order is not currently holding stock.
+      if (!order.stockHeldAt) {
+        return order;
+      }
+
+      const now = new Date();
+      const claimed = await tx.supplierOrder.updateMany({
+        where: { id: orderId, stockHeldAt: { not: null } },
+        data: { stockHeldAt: null, stockRestoredAt: now },
+      });
+      if (claimed.count !== 1) {
+        return tx.supplierOrder.findUniqueOrThrow({
+          where: { id: orderId },
+          include: { items: true },
+        });
+      }
+
+      for (const item of order.items) {
+        if (item.stockDeductedQty === 0 || !item.listingId) continue;
+        const restored = await tx.productListing.updateMany({
+          where: { id: item.listingId },
+          data: { stockQty: { increment: item.stockDeductedQty } },
+        });
+        if (restored.count !== 1) {
+          throw conflict("The listing for this held order no longer exists");
+        }
+        await tx.supplierOrderItem.update({
+          where: { id: item.id },
+          data: { stockDeductedQty: 0 },
+        });
+      }
+
+      await auditCritical(
+        {
+          actorProfileId: profileId,
+          action: AUDIT.SUPPLIER_HELD_STOCK_RELEASED,
+          entityType: "SupplierOrder",
+          entityId: orderId,
+          metadata: { released: true },
+        },
+        { client: tx },
+      );
+
+      return tx.supplierOrder.findUniqueOrThrow({
+        where: { id: orderId },
+        include: { items: true },
+      });
+    }),
+  );
+}
+
 // ── Dashboards ──────────────────────────────────────────────────────────────
 
 export async function getSupplierDashboard(supplierProfileId: string) {

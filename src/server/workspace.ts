@@ -601,6 +601,80 @@ export async function updateOrderStatus(
   return result.order;
 }
 
+export async function releaseHeldStock(
+  orderId: string,
+  profileId: string,
+  isAdmin: boolean = false,
+) {
+  if (!isAdmin) {
+    throw forbidden("Only a platform owner or mediator can release held stock");
+  }
+
+  return withStockTransaction(() =>
+    prisma.$transaction(async (tx) => {
+      const order = await tx.customerOrder.findUnique({
+        where: { id: orderId },
+        include: { items: true },
+      });
+      if (!order) throw notFound("Order not found");
+
+      // Idempotent: nothing to do when this order is not currently holding stock.
+      if (!order.stockHeldAt) {
+        return order;
+      }
+
+      const now = new Date();
+      const claimed = await tx.customerOrder.updateMany({
+        where: { id: orderId, stockHeldAt: { not: null } },
+        data: { stockHeldAt: null, stockRestoredAt: now },
+      });
+      if (claimed.count !== 1) {
+        // A concurrent release won the claim; return current state without a second audit.
+        return tx.customerOrder.findUniqueOrThrow({
+          where: { id: orderId },
+          include: { items: true },
+        });
+      }
+
+      for (const item of order.items) {
+        if (item.stockDeductedQty === 0 || !item.productId) continue;
+        const restored = await tx.product.updateMany({
+          where: { id: item.productId, workspaceId: order.workspaceId },
+          data: { stockQty: { increment: item.stockDeductedQty } },
+        });
+        if (restored.count !== 1) {
+          throw conflict("The product for this held order no longer exists");
+        }
+        await tx.orderItem.update({
+          where: { id: item.id },
+          data: { stockDeductedQty: 0 },
+        });
+      }
+
+      await tx.stockHold.updateMany({
+        where: { orderId, releasedAt: null },
+        data: { releasedAt: now, releasedByProfileId: profileId },
+      });
+
+      await auditCritical(
+        {
+          actorProfileId: profileId,
+          action: AUDIT.HELD_STOCK_RELEASED,
+          entityType: "CustomerOrder",
+          entityId: orderId,
+          metadata: { released: true },
+        },
+        { client: tx },
+      );
+
+      return tx.customerOrder.findUniqueOrThrow({
+        where: { id: orderId },
+        include: { items: true },
+      });
+    }),
+  );
+}
+
 export async function addPayment(
   workspaceId: string,
   orderId: string,
