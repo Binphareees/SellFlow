@@ -133,23 +133,14 @@ Do not expand the MVP without explicit approval.
 
 ## 7. Work in progress — do not clobber
 
-There are **34 uncommitted changes** on `main`. The active thread is **S-09 (password reset/change)**:
+As of 2026-11-20, `main` is clean at commit `158fcd899a96a1b89d4e0c163f30f199198236b5`; there are no uncommitted S-09 or other working-tree changes in this repository.
 
-- Modified: `prisma/seed.ts`, `scripts/seed-guard.ts`,
-  `src/app/api/auth/password-reset/reset/route.ts`, `src/app/api/auth/password/change/route.ts`,
-  `src/components/auth-forms.tsx`, `src/components/shell.tsx`,
-  `src/lib/auth/reset-token.test.ts`, `vitest.config.ts`
-- New (untracked): `src/app/reset-password/page.tsx`, `src/app/(app)/settings/security/page.tsx`,
-  `src/lib/auth/password-flows.test.ts`
+Standing guardrails remain in force:
 
-S-09's documented gaps were: no `/reset-password` page (emailed link resolved to nothing), no
-reset-request throttling, and S-09 tests outside the Vitest include list. The first and third appear to be
-in progress here. **Verify current state before assuming either way.**
-
-Also untracked: `.cloud-attachments/`, `home/`, `prisma/disposable_scratch/`, `prisma/schema.prisma.tmp`,
-`scripts/s09-e2e-run.sh.bak*`, several `_r8_*.py` and `_correct_phase*.py` helper scripts, `tmp/`.
-
-Do not commit, revert, or "clean up" any of this without asking the owner.
+- `prisma/dev.db` is untouched (`59d9cb2c6bd8ee65c87479c486c2779fb4d5263a371673c7bf1dd5fd3885592c`).
+- The C-2 migration checksum anomaly remains open.
+- S-03, S-04, and S-09 remain implemented but not accepted/verified; S-09 reset-request throttling is still a known gap.
+- Do not commit, revert, or "clean up" without owner authorization.
 
 ---
 
