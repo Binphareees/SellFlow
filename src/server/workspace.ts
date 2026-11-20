@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
-import { audit, AUDIT } from "@/lib/audit";
-import { badRequest, conflict, notFound } from "@/lib/api";
+import { audit, auditCritical, AUDIT } from "@/lib/audit";
+import { badRequest, conflict, forbidden, notFound } from "@/lib/api";
 import { balanceOf, paymentState } from "@/lib/money";
 import { assertCapacity, assertFeature } from "@/lib/subscription";
 import { FEATURE } from "@/lib/plans";
@@ -30,8 +30,10 @@ export type OrderWithMoney = {
   costKobo: number;
   channel: string;
   createdAt: Date;
+  stockHeldAt?: Date | null;
   customer: { id: string; name: string; phone: string | null };
   payments: { amountKobo: number; voidedAt: Date | null }[];
+  paymentReversals?: { amountKobo: number; kind: string }[];
 };
 
 export function paidKoboOf(payments: { amountKobo: number; voidedAt: Date | null }[]): number {
@@ -71,12 +73,16 @@ async function withStockTransaction<T>(operation: () => Promise<T>): Promise<T> 
 
 export function summariseOrder<T extends OrderWithMoney>(order: T) {
   const paid = paidKoboOf(order.payments);
+  const refunded = (order.paymentReversals ?? []).reduce((sum, r) => sum + r.amountKobo, 0);
   return {
     ...order,
     paidKobo: paid,
+    refundedKobo: refunded,
+    netPaidKobo: paid - refunded,
     balanceKobo: balanceOf(order.totalKobo, paid),
     paymentState: paymentState(order.totalKobo, paid),
     profitKobo: order.totalKobo - order.costKobo,
+    stockHeld: Boolean(order.stockHeldAt),
   };
 }
 
@@ -237,6 +243,7 @@ export async function getOrder(workspaceId: string, orderId: string) {
       customer: true,
       items: { orderBy: { id: "asc" } },
       payments: { orderBy: { paidAt: "desc" } },
+      paymentReversals: { orderBy: { createdAt: "desc" } },
       promises: { orderBy: { promisedFor: "asc" } },
       paymentPlan: true,
       supplierOrder: {
@@ -436,12 +443,13 @@ export async function updateOrderStatus(
   orderId: string,
   profileId: string,
   status: string,
+  isAdmin: boolean = false,
 ) {
   const result = await withStockTransaction(() =>
     prisma.$transaction(async (tx) => {
       const order = await tx.customerOrder.findFirst({
         where: { id: orderId, workspaceId, deletedAt: null },
-        include: { items: true },
+        include: { items: true, payments: { select: { amountKobo: true, voidedAt: true } } },
       });
       if (!order) throw notFound("Order not found");
       if (order.status === "DELIVERED" && status !== "CANCELLED") {
@@ -451,59 +459,145 @@ export async function updateOrderStatus(
       // Cancellation is idempotent: a second request finds the order already
       // cancelled and returns it without touching stock again.
       if (status === "CANCELLED" && order.status === "CANCELLED") {
-        return { order, from: order.status };
+        return { order, from: order.status, held: Boolean(order.stockHeldAt) };
       }
 
       const now = new Date();
       if (status === "CANCELLED") {
+        const paid = paidKoboOf(order.payments);
+        const hasPartialPayment = paid > 0;
+
+        // Decision 6: cancellation after recorded partial payment is restricted
+        // to platform owner/admin (or inherited mediator). Unpaid orders keep
+        // the normal workspace cancellation path.
+        if (hasPartialPayment && !isAdmin) {
+          throw forbidden("Only a platform owner or mediator can cancel an order with recorded payment");
+        }
+
         // Claim the cancellation first. If two requests race, only one moves
-        // the order out of its predecessor state and therefore restores stock.
+        // the order out of its predecessor state and therefore restores/holds stock.
+        const cancelData: Record<string, unknown> = { status: "CANCELLED", cancelledAt: now };
+        if (hasPartialPayment) {
+          cancelData.stockHeldAt = now;
+        } else {
+          cancelData.stockRestoredAt = now;
+        }
         const claimed = await tx.customerOrder.updateMany({
           where: { id: orderId, workspaceId, status: order.status, deletedAt: null },
-          data: { status: "CANCELLED", cancelledAt: now, stockRestoredAt: now },
+          data: cancelData,
         });
         if (claimed.count !== 1) {
           throw conflict("The order changed while it was being cancelled");
         }
 
-        // Restore only the quantity this order actually reserved, then clear
-        // the marker so the reservation can never be released twice.
-        for (const item of order.items) {
-          if (item.stockDeductedQty === 0) continue;
-          if (item.productId) {
-            const restored = await tx.product.updateMany({
-              where: { id: item.productId, workspaceId },
-              data: { stockQty: { increment: item.stockDeductedQty } },
-            });
-            if (restored.count !== 1) {
-              throw conflict("The product for this order no longer exists");
+        if (hasPartialPayment) {
+          // Hold/quarantine stock: do NOT return units to Product.stockQty.
+          // Record a StockHold per product line for audit and later release.
+          const paidAmount = paid;
+          // Idempotent refund/credit record.
+          const idempotencyKey = `customer-order:${orderId}:cancel`;
+          const existingReversal = await tx.paymentReversal.findUnique({
+            where: { idempotencyKey },
+          });
+          if (!existingReversal) {
+            try {
+              await tx.paymentReversal.create({
+                data: {
+                  orderId,
+                  workspaceId,
+                  amountKobo: paidAmount,
+                  kind: "REFUND",
+                  reason: "Full refund/credit on cancellation of partially paid order",
+                  recordedByProfileId: profileId,
+                  idempotencyKey,
+                },
+              });
+            } catch (error) {
+              // Unique constraint race: another attempt already created it.
+              const code = (error as { code?: string }).code;
+              if (code !== "P2002") throw error;
             }
           }
-          await tx.orderItem.update({
-            where: { id: item.id },
-            data: { stockDeductedQty: 0 },
-          });
+
+          for (const item of order.items) {
+            if (item.stockDeductedQty === 0 || !item.productId) continue;
+            // StockHold upsert via unique (orderId, productId).
+            const existingHold = await tx.stockHold.findUnique({
+              where: { orderId_productId: { orderId, productId: item.productId } },
+            });
+            if (!existingHold) {
+              try {
+                await tx.stockHold.create({
+                  data: {
+                    orderId,
+                    productId: item.productId,
+                    qty: item.stockDeductedQty,
+                    reason: "Held on cancellation of partially paid order (Decision 6)",
+                  },
+                });
+              } catch (error) {
+                const code = (error as { code?: string }).code;
+                if (code !== "P2002") throw error;
+              }
+            }
+            // Leave stockDeductedQty as-is so the reservation stays held.
+          }
+
+          await auditCritical(
+            {
+              actorProfileId: profileId,
+              action: AUDIT.PAYMENT_REVERSED,
+              entityType: "CustomerOrder",
+              entityId: orderId,
+              metadata: { from: order.status, to: "CANCELLED", paidKobo: paidAmount, held: true },
+            },
+            { client: tx },
+          );
+        } else {
+          // Restore only the quantity this order actually reserved, then clear
+          // the marker so the reservation can never be released twice.
+          for (const item of order.items) {
+            if (item.stockDeductedQty === 0) continue;
+            if (item.productId) {
+              const restored = await tx.product.updateMany({
+                where: { id: item.productId, workspaceId },
+                data: { stockQty: { increment: item.stockDeductedQty } },
+              });
+              if (restored.count !== 1) {
+                throw conflict("The product for this order no longer exists");
+              }
+            }
+            await tx.orderItem.update({
+              where: { id: item.id },
+              data: { stockDeductedQty: 0 },
+            });
+          }
         }
       } else {
         const updated = await tx.customerOrder.update({
           where: { id: orderId },
           data: { status },
         });
-        return { order: updated, from: order.status };
+        return { order: updated, from: order.status, held: false };
       }
 
       const updated = await tx.customerOrder.findUniqueOrThrow({ where: { id: orderId } });
-      return { order: updated, from: order.status };
+      return { order: updated, from: order.status, held: Boolean(updated.stockHeldAt) };
     }),
   );
 
-  await audit({
-    actorProfileId: profileId,
-    action: AUDIT.ORDER_STATUS,
-    entityType: "CustomerOrder",
-    entityId: orderId,
-    metadata: { from: result.from, to: status },
-  });
+  // Non-held (unpaid) cancellations and other status changes use best-effort audit.
+  if (status === "CANCELLED" && result.held) {
+    // auditCritical already written inside the transaction.
+  } else {
+    await audit({
+      actorProfileId: profileId,
+      action: AUDIT.ORDER_STATUS,
+      entityType: "CustomerOrder",
+      entityId: orderId,
+      metadata: { from: result.from, to: status },
+    });
+  }
   return result.order;
 }
 

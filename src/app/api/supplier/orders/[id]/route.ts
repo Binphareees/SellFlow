@@ -1,7 +1,7 @@
 import { route, readBody, json } from "@/lib/api";
 import { supplierOrderStatusSchema } from "@/lib/validation";
 import { requireAuth } from "@/lib/auth/session";
-import { requireSupplier } from "@/lib/auth/rbac";
+import { requireSupplier, isMediator } from "@/lib/auth/rbac";
 import { getSupplierOrder, setSupplierOrderStatus } from "@/server/supplier";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -18,12 +18,14 @@ export const PATCH = route(async (request: Request, ctx: Ctx) => {
   const auth = await requireSupplier();
   const { id } = await ctx.params;
   const input = await readBody(request, supplierOrderStatusSchema);
+  const isAdmin = auth.user.isPlatformAdmin || isMediator(auth);
   const order = await setSupplierOrderStatus(
     auth.supplierProfileId,
     auth.profile.id,
     id,
     input.status,
     input.note ?? null,
+    isAdmin,
   );
   return json({ order });
 });

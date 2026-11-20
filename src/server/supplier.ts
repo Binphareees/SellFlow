@@ -1422,12 +1422,13 @@ export async function setSupplierOrderStatus(
   orderId: string,
   status: string,
   note?: string | null,
+  isAdmin: boolean = false,
 ) {
   const result = await withStockTransaction(() =>
     prisma.$transaction(async (tx) => {
       const order = await tx.supplierOrder.findFirst({
         where: { id: orderId, supplierProfileId },
-        include: { items: true },
+        include: { items: true, claims: true },
       });
       if (!order) throw notFound("Supplier order not found");
 
@@ -1440,6 +1441,15 @@ export async function setSupplierOrderStatus(
         throw conflict(
           `An order cannot move from ${order.status} to ${status}; use the stock, payment claim, dispatch or delivery step`,
         );
+      }
+
+      const hasPaymentClaims =
+        (order.claims?.length ?? 0) > 0 || order.paymentClaimStatus !== "NONE";
+
+      // Decision 6: cancellation of an order with payment claims is restricted
+      // to platform owner/admin (or inherited mediator) and holds stock.
+      if (status === "CANCELLED" && hasPaymentClaims && !isAdmin) {
+        throw forbidden("Only a platform owner or mediator can cancel an order with payment claims");
       }
 
       const now = new Date();
@@ -1455,7 +1465,7 @@ export async function setSupplierOrderStatus(
             ? {
                 cancelledAt: now,
                 cancellationReason: note ?? null,
-                stockRestoredAt: now,
+                ...(hasPaymentClaims ? { stockHeldAt: now } : { stockRestoredAt: now }),
               }
             : {}),
         },
@@ -1466,38 +1476,57 @@ export async function setSupplierOrderStatus(
 
       // Restore only what this order actually deducted, then clear the marker.
       // A declined order never deducted anything, so this is a no-op for it.
+      // Decision 6: when payment claims exist, hold/quarantine stock instead.
       if (status === "CANCELLED") {
-        for (const item of order.items) {
-          if (item.stockDeductedQty === 0) continue;
-          if (item.listingId) {
-            const restored = await tx.productListing.updateMany({
-              where: { id: item.listingId },
-              data: { stockQty: { increment: item.stockDeductedQty } },
-            });
-            if (restored.count !== 1) {
-              throw conflict("The listing for this order no longer exists");
+        if (hasPaymentClaims) {
+          // Hold: leave stockDeductedQty > 0 (units stay out of available listing stock).
+          // auditCritical inside the transaction.
+          await auditCritical(
+            {
+              actorProfileId: profileId,
+              actorRole: "SUPPLIER",
+              action: AUDIT.SUPPLIER_ORDER_STATUS,
+              entityType: "SupplierOrder",
+              entityId: orderId,
+              metadata: { from: order.status, to: "CANCELLED", held: true, paymentClaims: true },
+            },
+            { client: tx },
+          );
+        } else {
+          for (const item of order.items) {
+            if (item.stockDeductedQty === 0) continue;
+            if (item.listingId) {
+              const restored = await tx.productListing.updateMany({
+                where: { id: item.listingId },
+                data: { stockQty: { increment: item.stockDeductedQty } },
+              });
+              if (restored.count !== 1) {
+                throw conflict("The listing for this order no longer exists");
+              }
             }
+            await tx.supplierOrderItem.update({
+              where: { id: item.id },
+              data: { stockDeductedQty: 0 },
+            });
           }
-          await tx.supplierOrderItem.update({
-            where: { id: item.id },
-            data: { stockDeductedQty: 0 },
-          });
         }
       }
 
       const updated = await tx.supplierOrder.findUniqueOrThrow({ where: { id: orderId } });
-      return { order: updated, from: order.status };
+      return { order: updated, from: order.status, held: hasPaymentClaims && status === "CANCELLED" };
     }),
   );
 
-  await audit({
-    actorProfileId: profileId,
-    actorRole: ROLE.SUPPLIER,
-    action: AUDIT.SUPPLIER_ORDER_STATUS,
-    entityType: "SupplierOrder",
-    entityId: orderId,
-    metadata: { from: result.from, to: status, note: note ?? null },
-  });
+  if (!result.held) {
+    await audit({
+      actorProfileId: profileId,
+      actorRole: ROLE.SUPPLIER,
+      action: AUDIT.SUPPLIER_ORDER_STATUS,
+      entityType: "SupplierOrder",
+      entityId: orderId,
+      metadata: { from: result.from, to: status, note: note ?? null },
+    });
+  }
   return result.order;
 }
 

@@ -134,6 +134,7 @@ export const AUDIT = {
   TIER_CHANGED: "profile.tier_changed",
   ORDER_CREATED: "customer_order.created",
   ORDER_STATUS: "customer_order.status_changed",
+  PAYMENT_REVERSED: "customer_order.payment_reversed",
   PAYMENT_RECORDED: "customer_order.payment_recorded",
   PAYMENT_VOIDED: "customer_order.payment_voided",
   PROMISE_CREATED: "customer_order.promise_created",

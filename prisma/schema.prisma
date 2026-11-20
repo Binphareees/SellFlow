@@ -164,6 +164,7 @@ model BusinessWorkspace {
   products        Product[]
   orders          CustomerOrder[]
   payments        ManualPayment[]
+  paymentReversals PaymentReversal[]
   paymentPlans    PaymentPlan[]
   promises        PaymentPromise[]
   supplierProfile SupplierProfile?
@@ -207,6 +208,7 @@ model Product {
 
   workspace  BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   orderItems OrderItem[]
+  stockHolds StockHold[]
   listings   ProductListing[]
 
   @@unique([workspaceId, sku])
@@ -231,12 +233,17 @@ model CustomerOrder {
   /// Set once when a cancellation released this order's Product reservations.
   /// A second cancellation must never restore the same stock again.
   stockRestoredAt DateTime?
+  /// Set once when a cancellation with recorded partial payment held/quarantined
+  /// this order's Product reservations instead of releasing them (Decision 6).
+  stockHeldAt DateTime?
 
   workspace BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   customer  Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
 
   items       OrderItem[]
   payments    ManualPayment[]
+  paymentReversals PaymentReversal[]
+  stockHolds  StockHold[]
   paymentPlan PaymentPlan?
   promises    PaymentPromise[]
   supplierOrder SupplierOrder?
@@ -285,8 +292,53 @@ model ManualPayment {
   order     CustomerOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
   workspace BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
+  reversals PaymentReversal[]
+
   @@index([orderId])
   @@index([workspaceId, paidAt])
+}
+
+/// A reversal (refund or credit) of recorded manual payments on a cancelled
+/// order with partial payment (Owner Decision 6). Integer kobo only; no gateway.
+model PaymentReversal {
+  id                  String    @id @default(cuid())
+  orderId             String
+  workspaceId         String
+  amountKobo          Int
+  kind                String // REFUND|CREDIT
+  reason              String?
+  reversedPaymentId   String?
+  recordedByProfileId String?
+  idempotencyKey      String    @unique
+  createdAt           DateTime  @default(now())
+
+  order           CustomerOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  workspace       BusinessWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  reversedPayment ManualPayment?    @relation(fields: [reversedPaymentId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([workspaceId, createdAt])
+}
+
+/// A held/quarantined stock reservation on a cancelled order with partial
+/// payment (Owner Decision 6). The units stay deducted from available stock
+/// until an explicit, race-safe release. Idempotent via (orderId, productId).
+model StockHold {
+  id                  String    @id @default(cuid())
+  orderId             String
+  productId           String?
+  qty                 Int
+  heldAt              DateTime  @default(now())
+  releasedAt          DateTime?
+  releasedByProfileId String?
+  reason              String?
+  createdAt           DateTime  @default(now())
+
+  order   CustomerOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, productId])
+  @@index([orderId])
 }
 
 model PaymentPlan {
@@ -578,6 +630,9 @@ model SupplierOrder {
   /// Set once when a cancellation or decline released this order's listing
   /// reservations. A second release must never add the same stock again.
   stockRestoredAt  DateTime?
+  /// Set once when a cancellation with payment claims held/quarantined this
+  /// order's listing reservations instead of releasing them (Decision 6).
+  stockHeldAt      DateTime?
   notes            String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
