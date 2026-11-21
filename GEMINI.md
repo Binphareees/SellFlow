@@ -94,7 +94,7 @@ npm run pilot:seed       # real pilot onboarding (interactive, --dry-run first)
 
 Baseline (2026-11-18, isolated): **516 executed, 515 PASS, 0 FAIL, 1 SKIP**. Reproduced twice.
 
-Tracked Vitest baseline (2026-11-21, disposable SQLite DB): **10 test files, 87 tests PASS** covering Owner Decision 6 (`src/server/decision6-stock-hold.test.ts`), S-09 (`src/lib/auth/reset-request-throttle.test.ts`), S-03/S-04 (`src/server/supplier-s03-s04.test.ts`), S-05 (`src/lib/auth/login-throttle.test.ts`), S-06/S-15 (`src/lib/seed-guard.test.ts`), S-08 (`src/lib/customer-visibility.test.ts`), and S-13 (`src/lib/csrf-origin.test.ts`), wired into `vitest.config.ts`; `npx tsc --noEmit` and `npm run build` PASS; `prisma/dev.db` checksum `59d9cb2c6bd8ee65c87479c486c2779fb4d5263a371673c7bf1dd5fd3885592c` unchanged.
+Tracked Vitest baseline (2026-11-21, disposable SQLite DB): **11 test files, 91 tests PASS** covering Owner Decision 6 (`src/server/decision6-stock-hold.test.ts`), S-09 (`src/lib/auth/reset-request-throttle.test.ts`), S-03/S-04 (`src/server/supplier-s03-s04.test.ts`), S-05 (`src/lib/auth/login-throttle.test.ts`), S-06/S-15 (`src/lib/seed-guard.test.ts`), S-08 (`src/lib/customer-visibility.test.ts`), S-13 (`src/lib/csrf-origin.test.ts`), and C-03 V1 scope (`src/lib/subscription-v1-scope.test.ts`), wired into `vitest.config.ts`; `npx tsc --noEmit` and `npm run build` PASS; `prisma/dev.db` checksum `59d9cb2c6bd8ee65c87479c486c2779fb4d5263a371673c7bf1dd5fd3885592c` unchanged.
 
 ---
 
