@@ -114,8 +114,8 @@ Tracked Vitest baseline (2026-11-21, disposable SQLite DB): **10 test files, 87 
 8. **Zero-cost tooling.** No paid APIs, no paid auth/image services.
 9. **One step per party.** Only the supplier confirms stock/dispatch/terms; only the reseller confirms
    delivery. Violations return 403, never a silent no-op.
-10. **Subscription billing (C-03) is out of V1 scope.** It exists in code; do not present or expand it as
-    authorized behaviour without an explicit owner decision.
+10. **Subscription billing (C-03) is out of V1 scope (resolved — scoped out of V1, owner decision 2026-11-21).** It exists in code; do not present or expand it as authorized behaviour. A follow-up code-isolation task must ensure no billing UI or plan-gate blocks pilot users before onboarding. Affected surfaces: `src/lib/plans.ts`, `src/lib/subscription.ts`, `src/server/workspace.ts`, `src/server/supplier.ts`, `src/app/(app)/settings/billing/`, `src/components/billing/`, `src/app/api/billing/`.
+11. **Canonical V1 baseline (C-01) is still open.** `PRD_V0.2.md` is a sourced requirements register with gaps, not the verbatim approved text. Options: (A) import canonical PRD into `docs/PRD_V1_APPROVED.md` and diff vs `STATE.md`; (B) ratify `STATE.md` + Owner Decisions 1–70 + D-001–D-019 as canonical V1 baseline. No binding choice recorded yet.
 
 ---
 
