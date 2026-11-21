@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { apiFetch, toKobo } from "@/lib/client";
 import { formatMoney } from "@/lib/money";
+import { subscriptionBillingEnabled } from "@/lib/plans";
 
 type ProductOption = {
   id: string;
@@ -70,9 +71,11 @@ function FormError({ error, code }: { error: string | null; code?: string | null
       <div className="notice">
         <div className="row-between">
           <span className="tiny grow">{error}</span>
-          <Link className="btn btn-sm btn-primary" href="/settings/billing">
-            See plans
-          </Link>
+          {subscriptionBillingEnabled() ? (
+            <Link className="btn btn-sm btn-primary" href="/settings/billing">
+              See plans
+            </Link>
+          ) : null}
         </div>
       </div>
     );

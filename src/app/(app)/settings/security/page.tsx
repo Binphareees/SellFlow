@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/session";
 import { ChangePasswordForm } from "@/components/auth-forms";
 import { BackLink } from "@/components/ui";
+import { subscriptionBillingEnabled } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -25,9 +26,11 @@ export default async function SecurityPage() {
         <ChangePasswordForm />
       </div>
 
-      <p className="tiny muted mt-16">
-        <Link href="/settings/billing">Plan and billing</Link>
-      </p>
+      {subscriptionBillingEnabled() ? (
+        <p className="tiny muted mt-16">
+          <Link href="/settings/billing">Plan and billing</Link>
+        </p>
+      ) : null}
     </>
   );
 }

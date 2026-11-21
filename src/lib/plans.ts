@@ -172,6 +172,7 @@ export function isPaidTier(tier: string | null | undefined): boolean {
 }
 
 export function planUnlocks(tier: string | null | undefined, feature: Feature): boolean {
+  if (!subscriptionBillingEnabled()) return true;
   return planFor(tier).features.includes(feature);
 }
 
@@ -181,6 +182,7 @@ export function isUnlimited(limit: number): boolean {
 
 /** null when under the cap, the cap when at or over it. */
 export function limitFor(tier: string | null | undefined, resource: keyof TierLimits): number {
+  if (!subscriptionBillingEnabled()) return UNLIMITED;
   return planFor(tier).limits[resource];
 }
 
@@ -204,6 +206,18 @@ export const SUBSCRIPTION_STATUS_LABEL: Record<string, string> = {
   PAST_DUE: "Payment overdue",
   CANCELED: "Canceled",
 };
+
+/**
+ * V1 pilot scope gate for subscription billing (C-03). Defaults to disabled so
+ * no billing UI, manual claim forms, or plan-quota gates block pilot users.
+ * Reversible: set SUBSCRIPTION_BILLING_ENABLED=true (or the NEXT_PUBLIC_ variant)
+ * to re-enable without code changes.
+ */
+export function subscriptionBillingEnabled(): boolean {
+  if (typeof process === "undefined") return false;
+  const env = process.env ?? {};
+  return env.SUBSCRIPTION_BILLING_ENABLED === "true" || env.NEXT_PUBLIC_SUBSCRIPTION_BILLING_ENABLED === "true";
+}
 
 export const PAYMENT_STATUS_LABEL: Record<string, string> = {
   SUBMITTED: "Submitted",

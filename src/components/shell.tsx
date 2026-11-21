@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { subscriptionBillingEnabled } from "@/lib/plans";
 import { useState } from "react";
 import { apiFetch } from "@/lib/client";
 
@@ -67,9 +68,11 @@ export function AppShell({
             <Link className="btn btn-sm btn-ghost" href="/settings/security">
               Security
             </Link>
-            <Link className="btn btn-sm btn-ghost" href="/settings/billing">
-              Plan
-            </Link>
+            {subscriptionBillingEnabled() ? (
+              <Link className="btn btn-sm btn-ghost" href="/settings/billing">
+                Plan
+              </Link>
+            ) : null}
             <span className="tiny muted" title={roles.join(", ")}>
               {displayName.split(" ")[0]}
             </span>

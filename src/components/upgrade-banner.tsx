@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { TIER, type TierLimits } from "@/lib/plans";
+import { TIER, subscriptionBillingEnabled, type TierLimits } from "@/lib/plans";
 
 const ROWS: { key: keyof TierLimits; label: string }[] = [
   { key: "customers", label: "customers" },
@@ -21,6 +21,7 @@ export function UpgradeBanner({
   usage: Record<keyof TierLimits, number>;
   limits: TierLimits;
 }) {
+  if (!subscriptionBillingEnabled()) return null;
   if (tier !== TIER.FREE) return null;
 
   const ranked = ROWS.filter((row) => Number.isFinite(limits[row.key]))

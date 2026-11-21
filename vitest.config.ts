@@ -19,6 +19,7 @@ export default defineConfig({
       "src/lib/customer-visibility.test.ts",
       "src/lib/auth/login-throttle.test.ts",
       "src/lib/csrf-origin.test.ts",
+      "src/lib/subscription-v1-scope.test.ts",
     ],
     environment: "node",
     fileParallelism: false,

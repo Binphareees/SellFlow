@@ -10,6 +10,7 @@ import {
   planFor,
   planUnlocks,
   priceKoboFor,
+  subscriptionBillingEnabled,
   type Feature,
   type Tier,
   type TierLimits,
@@ -131,6 +132,7 @@ export async function getEntitlements(workspaceId: string): Promise<Entitlements
 /** Free plans are capped; paid plans return Infinity and never hit this. */
 export async function assertCapacity(workspaceId: string, resource: keyof TierLimits, adding = 1) {
   const entitlements = await getEntitlements(workspaceId);
+  if (!subscriptionBillingEnabled()) return entitlements;
   const limit = limitFor(entitlements.tier, resource);
   if (!Number.isFinite(limit)) return entitlements;
 
@@ -142,6 +144,7 @@ export async function assertCapacity(workspaceId: string, resource: keyof TierLi
 
 export async function assertFeature(workspaceId: string, feature: Feature) {
   const entitlements = await getEntitlements(workspaceId);
+  if (!subscriptionBillingEnabled()) return entitlements;
   if (planUnlocks(entitlements.tier, feature)) return entitlements;
 
   const needsSupplierPro =
@@ -152,6 +155,7 @@ export async function assertFeature(workspaceId: string, feature: Feature) {
 /** Multi-supplier is a countable cap, not a boolean: Free gets exactly one. */
 export async function assertSupplierCapacity(workspaceId: string, nextSupplierProfileId: string) {
   const entitlements = await getEntitlements(workspaceId);
+  if (!subscriptionBillingEnabled()) return entitlements;
   const limit = entitlements.limits.suppliers;
   if (!Number.isFinite(limit)) return entitlements;
 

@@ -11,6 +11,7 @@ import {
   TIER,
   formatLimit,
   isUnlimited,
+  subscriptionBillingEnabled,
   usagePercent,
   type TierLimits,
 } from "@/lib/plans";
@@ -31,6 +32,7 @@ const SUPPORT_WHATSAPP = process.env.NEXT_PUBLIC_SUPPORT_WHATSAPP?.replace(/\D/g
 export default async function BillingPage() {
   const ctx = await getAuthContext();
   if (!ctx?.workspaceId) redirect("/login");
+  if (!subscriptionBillingEnabled()) redirect("/settings");
 
   const summary = await getBillingSummary(ctx.workspaceId);
   const { plan, tier, usage, limits } = summary;
