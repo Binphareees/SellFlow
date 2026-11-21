@@ -37,10 +37,10 @@ experiment, and the GO/REVISE/STOP decision.
 
 ### Security findings — never close one without evidence
 
-Accepted (dated acceptance record exists): **S-01, S-02, S-05, S-08, S-12, S-13, S-14, S-15**.
+Accepted (dated acceptance record exists): **S-01, S-02, S-03, S-04, S-05, S-07, S-08, S-09, S-10, S-11, S-12, S-13, S-14, S-15**.
 Authorized (residual risk documented; owner sign-off recorded 2026-11-21): **S-06**.
 
-Open / implemented-awaiting-verification: **S-03, S-04, S-07, S-09, S-10, S-11**.
+Open / implemented-awaiting-verification: **none**.
 Authorized but residual risk documented: **S-06**.
 
 Rule: a finding is `Accepted` only when a dated acceptance record exists **and** the implementation is
@@ -148,7 +148,7 @@ Standing guardrails remain in force:
 
 - `prisma/dev.db` is untouched (`59d9cb2c6bd8ee65c87479c486c2779fb4d5263a371673c7bf1dd5fd3885592c`).
 - The C-2 migration checksum anomaly remains open.
-- S-03, S-04, and S-09 remain implemented but not accepted. S-09 reset-request throttling and single-active-token invalidation are implemented (commit c86d3c0); the `/reset-password` UI page (Request Reset Mode + `?token=...` Confirm New Password Mode) and `/login` "Forgot password?" link are implemented and verified end-to-end on a disposable SQLite DB; remaining unverified runtime items: Postgres runtime, real Resend delivery.
+- S-03, S-04, S-07, S-09, S-10, and S-11 are now Accepted (owner sign-off 2026-11-21), accepting documented gaps as V1 limitations. S-09 remaining runtime items (Postgres runtime, real Resend delivery) remain disclosure conditions. S-06 remains Authorized with operational gate.
 - Do not commit, revert, or "clean up" without owner authorization.
 
 ---
@@ -169,8 +169,8 @@ Standing guardrails remain in force:
 
 Good next moves, in priority order:
 
-1. **Close S-09 verification gap** — reset-request throttling, single-active-token invalidation, and the `/reset-password` UI page are implemented and verified on a disposable SQLite DB; remaining runtime verification is Postgres execution and real Resend delivery. Produce evidence and ask the owner to accept or reject.
-2. **Verification, not new features** — S-03, S-04, S-05, S-07, S-08, S-10, S-11, S-13, S-15 are implemented
+1. **S-09 runtime verification** — Postgres execution and real Resend delivery remain disclosure conditions under the 2026-11-21 acceptance; verify during Phase 0 pilot.
+2. **Verification, not new features** — remaining work is Phase 0 field validation and runtime disclosures; no S-03/S-04/S-07/S-09/S-10/S-11 implementation changes required.
    but unaccepted. Each needs a test that fails before the fix and passes after, then a dated acceptance record.
 3. **Phase 0** — this is the real gate. Interviews, category selection, competitor check, concierge experiment.
    Implementation progress does not substitute for it.
