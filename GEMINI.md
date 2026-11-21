@@ -24,7 +24,7 @@ Root also contains many `STAGE2_*` / `A17_A6_*` / `PART1_*` reports — evidence
 
 ---
 
-## 2. Current status (as of 2026-11-18)
+## 2. Current status (as of 2026-11-21)
 
 - **Phase 0 validation: INCOMPLETE.** No interviews, no dated prototype commitments, no concierge results.
 - **Implementation: AUTHORIZED 2026-11-04** (D-019). Build and fix freely within the constraints below.
@@ -93,6 +93,8 @@ npm run pilot:seed       # real pilot onboarding (interactive, --dry-run first)
 
 Baseline (2026-11-18, isolated): **516 executed, 515 PASS, 0 FAIL, 1 SKIP**. Reproduced twice.
 
+Tracked Vitest baseline (2026-11-21, disposable SQLite DB): **6 test files, 46 tests PASS** covering Owner Decision 6 (`src/server/decision6-stock-hold.test.ts`), S-09 (`src/lib/auth/reset-request-throttle.test.ts`), and S-03/S-04 (`src/server/supplier-s03-s04.test.ts`), wired into `vitest.config.ts`; `npx tsc --noEmit` and `npm run build` PASS; `prisma/dev.db` checksum `59d9cb2c6bd8ee65c87479c486c2779fb4d5263a371673c7bf1dd5fd3885592c` unchanged.
+
 ---
 
 ## 5. Hard rules — these are not style preferences
@@ -133,13 +135,19 @@ Do not expand the MVP without explicit approval.
 
 ## 7. Work in progress — do not clobber
 
-As of 2026-11-20, `main` is clean at commit `158fcd899a96a1b89d4e0c163f30f199198236b5`; there are no uncommitted S-09 or other working-tree changes in this repository.
+As of 2026-11-21, `main` is clean at commit `f067bc3e3311b81c06370503912037da99de7c26`; there are no uncommitted working-tree changes in this repository.
+
+Phase 0 documentation suite (all PII-free, anonymized cohort IDs where applicable):
+
+- `docs/PHASE0_PILOT_LAUNCH_VALIDATION_PLAN.md`
+- `docs/PHASE0_INTERVIEW_SCRIPTS.md`
+- `docs/PHASE0_FIELD_EXECUTION_TRACKER.md`
 
 Standing guardrails remain in force:
 
 - `prisma/dev.db` is untouched (`59d9cb2c6bd8ee65c87479c486c2779fb4d5263a371673c7bf1dd5fd3885592c`).
 - The C-2 migration checksum anomaly remains open.
-- S-03, S-04, and S-09 remain implemented but not accepted/verified; S-09 reset-request throttling is still a known gap.
+- S-03, S-04, and S-09 remain implemented but not accepted. S-09 reset-request throttling and single-active-token invalidation are implemented (commit c86d3c0); the `/reset-password` UI page (Request Reset Mode + `?token=...` Confirm New Password Mode) and `/login` "Forgot password?" link are implemented and verified end-to-end on a disposable SQLite DB; remaining unverified runtime items: Postgres runtime, real Resend delivery.
 - Do not commit, revert, or "clean up" without owner authorization.
 
 ---
@@ -160,8 +168,7 @@ Standing guardrails remain in force:
 
 Good next moves, in priority order:
 
-1. **Finish S-09** — confirm `/reset-password` works end to end, add reset-request throttling, keep the tests
-   inside the Vitest include list. Then produce evidence and ask the owner to accept or reject.
+1. **Close S-09 verification gap** — reset-request throttling, single-active-token invalidation, and the `/reset-password` UI page are implemented and verified on a disposable SQLite DB; remaining runtime verification is Postgres execution and real Resend delivery. Produce evidence and ask the owner to accept or reject.
 2. **Verification, not new features** — S-03, S-04, S-05, S-07, S-08, S-10, S-11, S-13, S-15 are implemented
    but unaccepted. Each needs a test that fails before the fix and passes after, then a dated acceptance record.
 3. **Phase 0** — this is the real gate. Interviews, category selection, competitor check, concierge experiment.
