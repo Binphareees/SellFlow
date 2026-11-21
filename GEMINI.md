@@ -37,9 +37,10 @@ experiment, and the GO/REVISE/STOP decision.
 
 ### Security findings — never close one without evidence
 
-Accepted (dated acceptance record exists): **S-01, S-02, S-12, S-14**.
+Accepted (dated acceptance record exists): **S-01, S-02, S-05, S-08, S-12, S-13, S-14, S-15**.
+Authorized (residual risk documented; owner sign-off recorded 2026-11-21): **S-06**.
 
-Open / implemented-awaiting-verification: **S-03, S-04, S-05, S-07, S-08, S-09, S-10, S-11, S-13, S-15**.
+Open / implemented-awaiting-verification: **S-03, S-04, S-07, S-09, S-10, S-11**.
 Authorized but residual risk documented: **S-06**.
 
 Rule: a finding is `Accepted` only when a dated acceptance record exists **and** the implementation is
