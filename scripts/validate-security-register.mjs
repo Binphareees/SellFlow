@@ -68,7 +68,7 @@ const STATUSES = new Set([
   "Explicitly excluded",
 ]);
 
-const EXPECTED_ACCEPTED = ["S-01", "S-02", "S-03", "S-04", "S-05", "S-07", "S-08", "S-09", "S-10", "S-11", "S-12", "S-13", "S-14", "S-15"];
+const EXPECTED_ACCEPTED = ["S-01", "S-02", "S-03", "S-04", "S-05", "S-06", "S-07", "S-08", "S-09", "S-10", "S-11", "S-12", "S-13", "S-14", "S-15"];
 
 /**
  * Findings whose evidence exists but whose acceptance is not recorded.

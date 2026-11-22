@@ -37,11 +37,9 @@ experiment, and the GO/REVISE/STOP decision.
 
 ### Security findings — never close one without evidence
 
-Accepted (dated acceptance record exists): **S-01, S-02, S-03, S-04, S-05, S-07, S-08, S-09, S-10, S-11, S-12, S-13, S-14, S-15**.
-Authorized (residual risk documented; owner sign-off recorded 2026-11-21): **S-06**.
+Accepted (dated acceptance record exists): **S-01, S-02, S-03, S-04, S-05, S-06, S-07, S-08, S-09, S-10, S-11, S-12, S-13, S-14, S-15**.
 
 Open / implemented-awaiting-verification: **none**.
-Authorized but residual risk documented: **S-06**.
 
 Rule: a finding is `Accepted` only when a dated acceptance record exists **and** the implementation is
 present. An implementation report alone is not acceptance. Do not rewrite, downgrade or delete finding text.
@@ -148,7 +146,7 @@ Standing guardrails remain in force:
 
 - `prisma/dev.db` is untouched (`59d9cb2c6bd8ee65c87479c486c2779fb4d5263a371673c7bf1dd5fd3885592c`).
 - The C-2 migration checksum anomaly remains open.
-- S-03, S-04, S-07, S-09, S-10, and S-11 are now Accepted (owner sign-off 2026-11-21), accepting documented gaps as V1 limitations. S-09 remaining runtime items (Postgres runtime, real Resend delivery) remain disclosure conditions. S-06 remains Authorized with operational gate.
+- S-03, S-04, S-06, S-07, S-09, S-10, and S-11 are now Accepted (owner sign-off 2026-11-21), accepting documented gaps as V1 limitations. S-09 remaining runtime items (Postgres runtime, real Resend delivery) remain disclosure conditions. S-06 residual risk (shared demo password in prisma/seed.ts) remains documented.
 - Do not commit, revert, or "clean up" without owner authorization.
 
 ---
