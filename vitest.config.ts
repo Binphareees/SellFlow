@@ -22,6 +22,7 @@ export default defineConfig({
       "src/lib/subscription-v1-scope.test.ts",
       "src/server/price-access-audit.test.ts",
       "src/lib/security-headers.test.ts",
+      "src/lib/auth/register-throttle.test.ts",
     ],
     environment: "node",
     fileParallelism: false,

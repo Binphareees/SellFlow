@@ -1,12 +1,24 @@
-import { route, readBody, json, conflict } from "@/lib/api";
+import { route, readBody, json, conflict, tooManyRequests } from "@/lib/api";
 import { registerSchema } from "@/lib/validation";
 import { registerAccount } from "@/server/accounts";
 import { applySessionCookie, clientIp, hashIp, startSession } from "@/lib/auth/session";
+import {
+  checkRegistrationThrottle,
+  recordRegistrationAttempt,
+} from "@/lib/auth/throttle";
 import { audit, AUDIT } from "@/lib/audit";
 
+const THROTTLED_MESSAGE = "Too many registration attempts. Try again later.";
+
 export const POST = route(async (request: Request) => {
-  const input = await readBody(request, registerSchema);
   const ip = clientIp(request);
+  const throttle = await checkRegistrationThrottle(ip);
+  if (throttle.locked) {
+    throw tooManyRequests(THROTTLED_MESSAGE, throttle.retryAfterSeconds);
+  }
+  await recordRegistrationAttempt(ip);
+
+  const input = await readBody(request, registerSchema);
 
   let account;
   try {
