@@ -15,7 +15,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1 — deps: install once, cached on package-lock.json
 # -----------------------------------------------------------------------------
-FROM node:18-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 
 # libc6-compat: glibc shim some native modules expect on musl.
@@ -29,7 +29,7 @@ RUN npm ci
 # -----------------------------------------------------------------------------
 # Stage 2 — builder: compile the app and generate the Prisma client
 # -----------------------------------------------------------------------------
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 
 RUN apk add --no-cache libc6-compat openssl
@@ -114,7 +114,7 @@ ENTRYPOINT ["npx", "tsx", "scripts/seed-pilot.mjs"]
 # -----------------------------------------------------------------------------
 # Stage 5 — runner: minimal image, non-root, writable data volume only
 # -----------------------------------------------------------------------------
-FROM node:18-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 RUN apk add --no-cache libc6-compat openssl \
