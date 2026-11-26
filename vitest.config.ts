@@ -21,6 +21,7 @@ export default defineConfig({
       "src/lib/csrf-origin.test.ts",
       "src/lib/subscription-v1-scope.test.ts",
       "src/server/price-access-audit.test.ts",
+      "src/lib/security-headers.test.ts",
     ],
     environment: "node",
     fileParallelism: false,

@@ -54,6 +54,10 @@ const password = z.string().min(8, "Use at least 8 characters").max(100);
 
 const money = z.enum(PAYMENT_METHOD);
 const isoDate = z.coerce.date();
+const httpsUrl = z
+  .string()
+  .url()
+  .refine((value) => value.startsWith("https://"), "Image URL must use https");
 
 export const registerSchema = z.object({
   email,
@@ -171,7 +175,7 @@ export const listingCreateSchema = z.object({
   publicPriceKobo: kobo,
   moq: z.number().int().min(1).max(10_000).default(1),
   stockQty: z.number().int().min(0).max(1_000_000).default(0),
-  images: z.array(z.string().url()).max(8).default([]),
+  images: z.array(httpsUrl).max(8).default([]),
   isPublished: z.boolean().default(false),
   offer: offerTermsSchema.optional(),
 });
@@ -183,7 +187,7 @@ export const listingUpdateSchema = z.object({
   publicPriceKobo: kobo.optional(),
   moq: z.number().int().min(1).max(10_000).optional(),
   stockQty: z.number().int().min(0).max(1_000_000).optional(),
-  images: z.array(z.string().url()).max(8).optional(),
+  images: z.array(httpsUrl).max(8).optional(),
   isPublished: z.boolean().optional(),
 });
 
