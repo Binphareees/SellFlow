@@ -191,7 +191,9 @@ export async function recordRegistrationAttempt(
   const config = throttleConfig();
   const windowStart = new Date(now.getTime() - config.windowMs);
   const lockUntil = new Date(now.getTime() + config.lockMs);
-  const limit = positiveInt(process.env.MAX_REGISTRATION_IP_ATTEMPTS, 5);
+  // Sign-ups legitimately cluster on shared mobile and market networks, so the
+  // default is far higher than the per-account sign-in limit.
+  const limit = positiveInt(process.env.MAX_REGISTRATION_IP_ATTEMPTS, 30);
 
   const row = await withSqliteRetry(() =>
     upsertFailure(
