@@ -16,6 +16,7 @@
     "db:studio": "prisma studio",
     "pilot:seed": "tsx scripts/seed-pilot.mjs",
     "verify": "node scripts/verify-api.mjs",
+    "verify:csp": "node scripts/verify-csp.mjs",
     "test:e2e": "node scripts/verify-api.mjs",
     "test:e2e:clean": "node scripts/test-e2e-clean.mjs",
     "test:pwa": "node scripts/verify-pwa.mjs",
