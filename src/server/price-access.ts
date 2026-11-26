@@ -30,7 +30,8 @@ export type ResellerTerms = {
   commissionType: string;
   commissionValue: number;
   moq: number;
-  stockQty: number;
+  /** Only populated for supplier-owner and moderation reads. */
+  stockQty?: number;
   paymentTermsDays: number;
   deliveryResponsibility: string;
   advertisingPermission: boolean;
@@ -293,7 +294,6 @@ export async function resolveResellerPrice(input: {
       commissionType: v.commissionType,
       commissionValue: v.commissionValue,
       moq: v.moq,
-      stockQty: 0,
       paymentTermsDays: v.paymentTermsDays,
       deliveryResponsibility: v.deliveryResponsibility,
       advertisingPermission: v.advertisingPermission,
@@ -542,12 +542,4 @@ export async function getListingCategories(): Promise<string[]> {
     take: 40,
   });
   return rows.map((r) => r.category!).filter(Boolean).sort();
-}
-
-/** Cheap headline for listing cards: is a private offer available at all? */
-export async function getOfferHeadline(offerId: string) {
-  return prisma.resellerOffer.findUnique({
-    where: { id: offerId },
-    select: { id: true, status: true, currentVersion: { select: { minResalePriceKobo: true, moq: true } } },
-  });
 }
