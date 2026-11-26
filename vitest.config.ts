@@ -20,6 +20,7 @@ export default defineConfig({
       "src/lib/auth/login-throttle.test.ts",
       "src/lib/csrf-origin.test.ts",
       "src/lib/subscription-v1-scope.test.ts",
+      "src/server/price-access-audit.test.ts",
     ],
     environment: "node",
     fileParallelism: false,

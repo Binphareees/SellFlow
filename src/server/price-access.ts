@@ -147,21 +147,29 @@ export async function resolveResellerPrice(input: {
   offerId: string;
   viewer: Viewer | null;
   ipHash?: string | null;
+  /**
+   * Browse surfaces (public listing page and listing API) resolve the price for
+   * every visitor; auditing each anonymous denial would write a row per page
+   * view. They pass false. The dedicated price endpoint keeps the default.
+   */
+  auditDenials?: boolean;
 }): Promise<PriceAccessResult> {
-  const { offerId, viewer, ipHash } = input;
+  const { offerId, viewer, ipHash, auditDenials = true } = input;
 
   const offer = await loadOfferHeader(offerId);
   if (!offer) return { allowed: false, reason: "NOT_FOUND" };
 
   const deny = async (reason: PriceDenyReason): Promise<PriceAccessResult> => {
-    await audit({
-      actorProfileId: viewer?.profileId ?? null,
-      action: AUDIT.PRICE_ACCESS_DENIED,
-      entityType: "ResellerOffer",
-      entityId: offerId,
-      metadata: { reason, listingId: offer.listingId },
-      ipHash: ipHash ?? null,
-    });
+    if (auditDenials) {
+      await audit({
+        actorProfileId: viewer?.profileId ?? null,
+        action: AUDIT.PRICE_ACCESS_DENIED,
+        entityType: "ResellerOffer",
+        entityId: offerId,
+        metadata: { reason, listingId: offer.listingId },
+        ipHash: ipHash ?? null,
+      });
+    }
     return { allowed: false, reason };
   };
 

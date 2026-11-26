@@ -39,6 +39,7 @@ export const GET = route(async (request: Request, ctx: Ctx) => {
           }
         : null,
       ipHash: clientIpHash(request),
+      auditDenials: false,
     });
 
     resellerPrice = access.allowed
