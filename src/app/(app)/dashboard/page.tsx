@@ -29,7 +29,7 @@ export default async function DashboardPage() {
     <>
       <div className="page-head">
         <div>
-          <h1>Good day, {ctx.profile.displayName.split(" ")[0]}</h1>
+          <h1>Overview</h1>
           <p>
             {totals.orderCount === 0
               ? "Add your first order to start tracking balances."
@@ -37,7 +37,7 @@ export default async function DashboardPage() {
           </p>
         </div>
         <Link className="btn btn-primary btn-sm" href="/dashboard/orders/new">
-          + New order
+          New order
         </Link>
       </div>
 

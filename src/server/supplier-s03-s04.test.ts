@@ -66,6 +66,17 @@ describe("S-03 payment claims", () => {
     }
   });
 
+  it("S-03 rejects self-assigned CONFIRMED/DISPUTED via request body", async () => {
+    const o = await makeOrder("AWAITING_PAYMENT");
+    await expect(
+      recordPaymentClaim(o.id, resellerProfileId, ["RESELLER"], { amountKobo: 500, method: "BANK_TRANSFER", status: "CONFIRMED" } as any),
+    ).rejects.toThrow(/only the supplier can confirm or dispute it/);
+    const o2 = await makeOrder("AWAITING_PAYMENT");
+    await expect(
+      recordPaymentClaim(o2.id, supplierOwnerId, ["SUPPLIER"], { amountKobo: 500, method: "BANK_TRANSFER", status: "DISPUTED" } as any),
+    ).rejects.toThrow(/A supplier records a claim as RECEIVED/);
+  });
+
   it("D1 blocks dual-role self-dealing on recordPaymentClaim", async () => {
     const o = await makeOrder("AWAITING_PAYMENT", { resellerProfileId: supplierOwnerId });
     await expect(

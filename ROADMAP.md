@@ -6,7 +6,7 @@
 
 > Runs in parallel with authorized implementation (D-019, 2026-11-04). Shipping code does not check off any item below; this section is still the validation gate.
 - [ ] Confirm target market (Nigerian businesses of all kinds) + country; select at least 4 business categories
-- [ ] Competitor check (5 tools and their weaknesses)
+- [x] Competitor check (5 tools and their weaknesses) — documented in docs/PHASE0_TWO_WEEK_EXPERIMENT.md §1 (2026-11-21)
 - [ ] 60 prospects listed across three groups (20 business owners, 20 suppliers, 20 resellers), spread across categories
 - [ ] 8+ interviews logged across at least 4 categories, including both marketplace sides (3 supplier + 3 reseller)
 - [ ] Pillar fit recorded for every participant (business management / marketplace / both)
