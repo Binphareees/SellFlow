@@ -69,6 +69,14 @@ dig +short A staging.sellflow.shop      # must be the host's address
 dig +short AAAA staging.sellflow.shop   # empty is fine; a stale AAAA breaks ACME
 ```
 
+If the zone is on Cloudflare, the record must be **DNS only** (grey cloud, not
+proxied). With the proxy on, Cloudflare is the peer Caddy sees: every visitor
+arrives from a Cloudflare address, `clientIp()` hashes that same address for
+everyone, and the sign-in, registration and password-reset IP throttles collapse
+into one shared bucket — the first few testers lock out every other tester.
+Leave the record unproxied for staging, or accept one shared throttle bucket on
+purpose.
+
 Nothing was created in this drill: there is no staging host and no zone access
 here. Caddy retries certificate issuance on its own, but a wrong or missing
 record means no HTTPS, which means no sign-in.
@@ -114,6 +122,53 @@ docker build --target pilot -t sellflow:pilot .
 the backup script both run inside the pilot image, as uid 1001, over the same
 mount.
 
+### On a small server: build on your laptop and ship the images
+
+`next build` is the memory-hungry step, and a 1–2 GB VPS is the usual place a
+deploy dies. Build on the laptop and copy the three images over instead of the
+source:
+
+```bash
+# Laptop, clean checkout of main
+cd /path/to/SellFlow
+git fetch && git checkout main && git pull --ff-only
+docker build \
+  --build-arg NEXT_PUBLIC_APP_URL=https://staging.sellflow.shop \
+  --build-arg NEXT_PUBLIC_APP_NAME=SellFlow \
+  -t sellflow:current .
+docker build --target migrator -t sellflow:migrator .
+docker build --target pilot -t sellflow:pilot .
+
+# One compressed stream, three images; nothing is written to the server's disk.
+docker save sellflow:current sellflow:migrator sellflow:pilot |
+  gzip -1 |
+  ssh deploy@staging.sellflow.shop 'gunzip | docker load'
+```
+
+The roundtrip was proved locally on 2026-11-28: `docker save` of the three
+images, `docker rmi sellflow:migrator sellflow:pilot sellflow:current`, then
+`docker load`, and `docker image inspect` reported the same image IDs and sizes
+before and after (`docker rmi` refuses a tag a container still references; none
+did here). The three images came to 664 MB gzipped, so give the host at least
+that much free disk before shipping them.
+
+Then continue at §5 — the images are already built and the server needs no
+compiler. The on-server build above remains the alternative for a host with
+enough RAM (4 GB is comfortable).
+
+Swap file instead of more RAM — **UNVERIFIED**:
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile &&
+  sudo mkswap /swapfile && sudo swapon /swapfile
+free -h                                    # "Swap: 2.0Gi"
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+That is the usual way to get a `next build` through on a 2 GB box, but no build
+was run on a swap-backed host here, so treat it as a suggestion, not a step that
+was tested.
+
 ## 5. Create the env file
 
 ```bash
@@ -135,6 +190,39 @@ Values that must match this deployment:
 | `APP_ORIGIN` | `https://staging.sellflow.shop` |
 | `SITE_ADDRESS` | `https://staging.sellflow.shop` |
 | `TRUSTED_PROXY_SECRET` | 32 random bytes, hex — the same value Caddy sends |
+
+### Quoting: write every value unquoted (measured 2026-11-28)
+
+The template ships every value without quotes. Keep it that way. Two different
+readers consume this file and they disagree about quotes:
+
+| Reader | What it did with `SITE_ADDRESS="https://staging.sellflow.shop"` |
+| --- | --- |
+| `docker compose --env-file` (the Caddy environment) | stripped them: `https://staging.sellflow.shop` |
+| Compose `env_file:` (the app container) | stripped them: `file:./data/prod.db`, `dummy…` |
+| `docker run --env-file` (the Docker CLI) | **kept them**: `"file:./data/prod.db"`, `"dummy…"` |
+
+Measured on Docker 29.1.3 / Compose v5.7.1 with a copy of
+`.env.production.example` whose placeholders were filled in *with the shipped
+quotes still around them*, then read back with `--entrypoint printenv` inside
+the real `caddy:2` and `sellflow:current` containers.
+
+This is not cosmetic: the operator grant and the nightly backup both run
+through `docker run --env-file`, where a quoted `DATABASE_URL` arrives as
+`"file:/app/data/prod.db"` — not a `file:` URL — so both scripts refuse to
+start. Compose alone tolerates quotes, the Docker CLI does not.
+
+Print what each side actually resolves, with the secrets masked:
+
+```bash
+docker compose --env-file .env.production \
+  -f deploy/docker-compose.staging.yml config |
+  sed -E 's/^([[:space:]]*(SESSION_SECRET|TRUSTED_PROXY_SECRET|RESEND_API_KEY):).*/\1 <masked>/'
+```
+
+Check in that output: `SITE_ADDRESS`, `APP_ORIGIN` and `NEXT_PUBLIC_APP_URL` are
+the same `https://` origin, `DATABASE_URL` is `file:/app/data/prod.db`, and no
+value starts with `"`.
 
 The relative `DATABASE_URL` from the template (`file:./data/prod.db`) resolves
 against `/app/prisma`, not the mount, and the health check then answers 503.
@@ -209,9 +297,13 @@ curl -sD - -o /dev/null https://staging.sellflow.shop/api/health |
 # x-content-type-options, referrer-policy, permissions-policy — each must be 1
 ```
 
-Browser check of the production CSP, service worker and fonts:
+Browser check of the production CSP, service worker and fonts. Run this **on
+your laptop, not on the server**: `scripts/verify-csp.mjs` drives Playwright's
+Chromium against the public URL, and the staging host has neither a browser nor
+Playwright installed.
 
 ```bash
+cd /path/to/SellFlow            # a checkout with node_modules
 BASE_URL=https://staging.sellflow.shop npm run verify:csp
 ```
 
@@ -225,7 +317,12 @@ nothing the client sent.
 Caddy matches on `Host`. A request to `https://<host-ip>/api/health` instead of
 the domain gets Caddy's empty default site, not the app.
 
-## 9. Resend domain verification — UNVERIFIED
+## 9. Resend domain verification — owner-reported
+
+**Resend reports `sellflow.shop` as verified (owner-reported, 2026-11-28).**
+Nothing in this repository can see the Resend dashboard, so that is recorded as
+the owner's report and was not verified here; the live reset email at the end of
+this section remains UNVERIFIED.
 
 Password reset sends through Resend, and Resend refuses a sender on a domain it
 has not verified. In the Resend dashboard, add `sellflow.shop` and publish the
@@ -246,13 +343,17 @@ RESEND_REPLY_TO=support@sellflow.shop
 RESEND_API_KEY=…
 ```
 
-Docker's `--env-file` keeps quotes literally; Compose's `env_file:` parses them,
-so write values unquoted either way. Restart the app, confirm
+Write these values **unquoted**, like the rest of the file. `docker run
+--env-file` keeps surrounding quotes literally, so `RESEND_API_KEY="re_…"`
+reaches the process with the quote characters attached and Resend rejects the
+key; Compose strips them, which is why a quoted file appears to work until the
+first `docker run` (§5 has the measurement). Restart the app, confirm
 `/api/health` reports `email.configured: true` and no `[startup] Email…` line
 appears, then request one password reset for a real mailbox.
 
-No record was published and no live email was sent in this drill; only the
-missing-configuration path was exercised.
+No record was published by this repository and no live email was sent in this
+drill; only the missing-configuration path was exercised. The owner's
+verification report above is the only evidence that sending will work.
 
 ## 10. Onboard the pilot pair
 
@@ -282,6 +383,22 @@ The dry run prints the plan and writes nothing; the second command writes the
 pair and prints only IDs. Re-running refuses an email that already exists, so it
 is safe to retry. Passwords may instead come from `PILOT_SUPPLIER_PASSWORD` /
 `PILOT_RESELLER_PASSWORD`.
+
+**Temporary passwords, then delete the file.** For the prototype week put a
+throwaway password in each account, tell both testers to replace it at first
+sign-in, and remove the file the moment the seed succeeds:
+
+```bash
+rm -f pilot-pair.json
+ls pilot-pair.json          # must fail: No such file or directory
+```
+
+Each tester changes their own password at **`/settings/security`** — the
+`Security` page (`src/app/(app)/settings/security/page.tsx`), which renders
+`ChangePasswordForm` and posts to **`POST /api/auth/password/change`** with the
+current and the new password. There is no operator-set-password route and no
+forced change at first login: a temporary password stays valid until that person
+replaces it, so say so in the same message that carries the sign-in link.
 
 ## 11. Nightly backup
 
@@ -413,6 +530,16 @@ The destination, its credentials and its retention are operator decisions;
 nothing in this repository configures them.
 
 ## 15. What the drills proved
+
+**T9 quoting and image roundtrip (2026-11-28)**, on the laptop, Docker 29.1.3 /
+Compose v5.7.1: a copy of `.env.production.example` filled with dummy values
+*with the shipped quotes* reached the Caddy container as
+`https://staging.sellflow.shop` and the app container as `file:./data/prod.db`
+(both Compose paths strip quotes), while `docker run --env-file` passed
+`"file:./data/prod.db"` **with** the quote characters. The same file with the
+quotes removed gave identical values on all three paths.
+`docker save | gzip | docker load` of `sellflow:current`, `sellflow:migrator` and
+`sellflow:pilot` round-tripped with identical image IDs and sizes.
 
 **T6 restore drill (2026-11-27)**, in `/tmp/t6-restore-drill`:
 
