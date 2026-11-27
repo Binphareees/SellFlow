@@ -7,6 +7,19 @@ import type { z } from "zod";
 import type { registerSchema, verificationSchema } from "@/lib/validation";
 
 /**
+ * Only the unique constraint on User.email may be reported as "this email
+ * already exists". SQLite reports foreign-key and NOT NULL failures through the
+ * same SQLITE_CONSTRAINT family, so matching the family (or "constraint"
+ * generally) would turn a real bug into a plausible 409.
+ */
+function isDuplicateEmailError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  if ((error as { code?: unknown }).code === "P2002") return true;
+  const message = (error as { message?: unknown }).message;
+  return typeof message === "string" && message.includes("UNIQUE constraint failed");
+}
+
+/**
  * Registration intentionally creates the business workspace in the same
  * transaction: there is no account in SellFlow without one.
  */
@@ -16,65 +29,60 @@ export async function registerAccount(input: z.infer<typeof registerSchema>) {
 
   const passwordHash = await hashPassword(input.password);
 
-  return (async () => {
-    try {
-      return await prisma.$transaction(async (tx) => {
-        const user = await tx.user.create({
-          data: { email: input.email, passwordHash },
-        });
-
-        const profile = await tx.profile.create({
-          data: {
-            userId: user.id,
-            displayName: input.displayName,
-            phone: input.phone ?? null,
-            country: input.country,
-            // Registration proves neither an email nor a phone. Tier 1 means
-            // "contact verified", so a new account starts at 0 and only the
-            // authorised verification workflow may elevate it.
-            verificationTier: 0,
-          },
-        });
-
-        await tx.profileRole.create({
-          data: { profileId: profile.id, role: ROLE.BUSINESS_OWNER },
-        });
-
-        const workspace = await tx.businessWorkspace.create({
-          data: {
-            ownerProfileId: profile.id,
-            name: input.businessName,
-            whatsappNumber: input.phone ?? null,
-          },
-        });
-
-        // The account does not exist without its trail: both commit, or neither.
-        await auditCritical(
-          {
-            actorProfileId: profile.id,
-            actorRole: ROLE.BUSINESS_OWNER,
-            action: AUDIT.REGISTER,
-            entityType: "User",
-            entityId: user.id,
-            metadata: { workspaceId: workspace.id },
-          },
-          { client: tx },
-        );
-
-        return { user, profile, workspace };
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: { email: input.email, passwordHash },
       });
-    } catch (error: unknown) {
-      // Two concurrent sign-ups can both pass the findUnique check; the
-      // unique constraint on User.email then decides the winner.
-      if (
-        (error as { code?: unknown }).code === "P2002" ||
-        /SQLITE_CONSTRAINT/i.test((error as { message?: string }).message ?? "")
-      ) {
-        throw conflict("An account with this email already exists");
-      }
-      throw error;
+
+      const profile = await tx.profile.create({
+        data: {
+          userId: user.id,
+          displayName: input.displayName,
+          phone: input.phone ?? null,
+          country: input.country,
+          // Registration proves neither an email nor a phone. Tier 1 means
+          // "contact verified", so a new account starts at 0 and only the
+          // authorised verification workflow may elevate it.
+          verificationTier: 0,
+        },
+      });
+
+      await tx.profileRole.create({
+        data: { profileId: profile.id, role: ROLE.BUSINESS_OWNER },
+      });
+
+      const workspace = await tx.businessWorkspace.create({
+        data: {
+          ownerProfileId: profile.id,
+          name: input.businessName,
+          whatsappNumber: input.phone ?? null,
+        },
+      });
+
+      // The account does not exist without its trail: both commit, or neither.
+      await auditCritical(
+        {
+          actorProfileId: profile.id,
+          actorRole: ROLE.BUSINESS_OWNER,
+          action: AUDIT.REGISTER,
+          entityType: "User",
+          entityId: user.id,
+          metadata: { workspaceId: workspace.id },
+        },
+        { client: tx },
+      );
+
+      return { user, profile, workspace };
+    });
+  } catch (error: unknown) {
+    // Two concurrent sign-ups can both pass the findUnique check; the unique
+    // constraint on User.email then decides the winner.
+    if (isDuplicateEmailError(error)) {
+      throw conflict("An account with this email already exists");
     }
-  })();
+    throw error;
+  }
 }
 
 /** Returns null for both "unknown email" and "wrong password" so nothing leaks. */

@@ -28,6 +28,7 @@ export default defineConfig({
       "src/lib/auth/register-throttle.test.ts",
       "src/app/(app)/dashboard/admin/page.test.ts",
       "src/app/api/health/route.test.ts",
+      "src/server/accounts.test.ts",
     ],
     environment: "node",
     fileParallelism: false,

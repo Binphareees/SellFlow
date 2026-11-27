@@ -5,8 +5,13 @@
  * Start a production server first, then run:
  *
  *   npm run build
- *   PORT=3001 npm run start        # in another terminal
+ *   npx next start -p 3001        # in another terminal
  *   BASE_URL=http://127.0.0.1:3001 npm run verify:csp
+ *
+ * `npm start` is fixed to port 3000 (`next start -p 3000`), so it cannot serve
+ * 3001: use `npx next start -p 3001` when 3000 is already taken. The Docker
+ * image runs `node .next/standalone/server.js` instead, and reads PORT and
+ * HOSTNAME from the container environment.
  *
  * Checks, for `/` and `/login`:
  *   - no securitypolicyviolation event fires;
