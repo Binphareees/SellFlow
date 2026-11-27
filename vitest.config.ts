@@ -27,6 +27,7 @@ export default defineConfig({
       "src/lib/security-headers.test.ts",
       "src/lib/auth/register-throttle.test.ts",
       "src/app/(app)/dashboard/admin/page.test.ts",
+      "src/app/api/health/route.test.ts",
     ],
     environment: "node",
     fileParallelism: false,

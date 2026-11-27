@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { auditHealth } from "@/lib/audit";
+import { isConfigValid } from "@/lib/resend";
 import pkg from "../../../../package.json";
 
 // Node runtime: the check needs Prisma, which cannot run in the edge runtime.
@@ -89,6 +90,12 @@ export async function GET(): Promise<NextResponse> {
         ...(database.error ? { error: database.error } : {}),
       },
       audit,
+      // Email sending is configured lazily (T9), so a deployment can start
+      // cleanly and still fail every password-reset send. Report presence only:
+      // no value, and no variable name, ever leaves the server.
+      email: {
+        configured: isConfigValid(),
+      },
       app: {
         name: process.env.NEXT_PUBLIC_APP_NAME ?? "SellFlow",
         version: APP_VERSION,
