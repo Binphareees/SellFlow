@@ -512,24 +512,78 @@ the same volume as `/srv/sellflow/data`: a disk failure, a ransomware run, or a
 mistyped `rm -rf` takes the database and every backup together. Copy each new
 backup off the host, to storage the host cannot delete.
 
-Sketch, not executed:
+Two scripts do it, both on the laptop, neither on the server:
+
+| File | Does |
+| --- | --- |
+| `scripts/pull-backups.sh` | rsync from the host into a local directory |
+| `scripts/verify-backup.mjs` | `integrity_check` + row counts on one file |
+
+### Pull
 
 ```bash
-restic -r s3:... backup /srv/sellflow/backups
-rclone copy /srv/sellflow/backups remote:sellflow-$(date -u +%Y-%m)
+mkdir -p ~/sellflow-backups && chmod 700 ~/sellflow-backups
+SSH_TARGET=deploy@staging.sellflow.shop \
+  ./scripts/pull-backups.sh ~/sellflow-backups
 ```
 
-Whichever you use, it must:
+It is additive by construction: rsync runs with `--append-verify` and **no**
+`--delete`, so a file that has disappeared on the host (the 14-day retention
+pruned it, or the host is gone) is never removed here, and a partial transfer is
+completed and checked rather than replaced. The directory is left 0700 and the
+files 0600, and the script prints what it copied and the newest file.
 
-- run after the nightly backup and only on files that passed validation;
-- keep at least the same 14-day window as the local directory;
-- be readable back **by you**, at least once, into a scratch directory — an
-  offsite copy nobody has ever restored is a hope, not a backup.
+Run it after the host's 02:15 backup, from a machine that is awake at that hour:
 
-The destination, its credentials and its retention are operator decisions;
-nothing in this repository configures them.
+```cron
+# crontab -e on the laptop (Linux)
+17 3 * * * SSH_TARGET=deploy@staging.sellflow.shop /home/YOU/SellFlow/scripts/pull-backups.sh /home/YOU/sellflow-backups >> /home/YOU/sellflow-pull.log 2>&1
+```
+
+On macOS, a `launchd` agent in `~/Library/LaunchAgents` does the same job:
+`StartCalendarInterval` with `Hour` 3 and `Minute` 17, `ProgramArguments` holding
+the script and the destination directory, `EnvironmentVariables` for
+`SSH_TARGET`, and `StandardOutPath` / `StandardErrorPath` under
+`~/Library/Logs/`. `launchd` needs absolute paths and does not read your shell
+profile.
+
+**How often:** daily, shortly after the host's backup. That bounds the loss at
+one day if the host disappears — not the 14 days a same-disk backup pretends to
+offer.
+
+### Monthly check
+
+```bash
+NEWEST="$(ls -1t ~/sellflow-backups/sellflow-*.db | head -1)"
+node scripts/verify-backup.mjs "$NEWEST"
+```
+
+It opens the file read-only (`node:sqlite`, so Node 22 or newer), runs
+`PRAGMA integrity_check`, prints the same table counts `backup:db` reports, and
+exits non-zero for a truncated, corrupted or missing file. Do this on the first
+Monday of the month and after any restore: a pulled copy nobody has ever
+verified is a hope, not a backup.
+
+**UNVERIFIED:** the pull from a real host and the cron/launchd installation. The
+rsync pull and the verifier were exercised against local directories on
+2026-11-28 (drill log at the end of this document), including the case where the
+remote copies vanish and the local ones must survive.
 
 ## 15. What the drills proved
+
+**T11 offsite pull and verification (2026-11-28)**, on the laptop, against a
+disposable SQLite database and local stand-ins for the host:
+
+- `verify-backup.mjs` on a copy `backup:db` had just written: `integrity_check:
+  ok`, the same eight table counts, `[verify] OK`, exit 0.
+- A copy truncated to 512 bytes and a copy with page 1 overwritten both printed
+  `[verify] FAILED` and exited 1; a missing file exited 1 and no argument 2.
+- The verifier changed nothing: same size, same mtime, and no `-wal` or
+  `-journal` appeared next to the file.
+- `pull-backups.sh` copied two backups into a 0700 directory as 0600 files, left
+  a file that existed only locally untouched, and after the remote copies were
+  deleted a second pull exited 0 and removed nothing (`--append-verify`, no
+  `--delete`). Cover: 9 tests in `src/lib/verify-backup.test.ts`.
 
 **T9 quoting and image roundtrip (2026-11-28)**, on the laptop, Docker 29.1.3 /
 Compose v5.7.1: a copy of `.env.production.example` filled with dummy values
@@ -594,7 +648,8 @@ quotes removed gave identical values on all three paths.
   (§9). Only the missing-config path was exercised.
 - Cron installation. The backup command was run by hand; the cron line was not
   installed or triggered.
-- The offsite copy in §14: nothing was configured, run or restored.
+- The offsite copy in §14: the pull and the verifier ran against local
+  directories only, and no cron or launchd job was installed.
 - `verify:csp` against HTTPS (it was last run on `http://127.0.0.1:3002`).
 - Multi-host or load-balanced deployment: SQLite, one bind mount and one trusted
   proxy hop assume one instance on one host with a local filesystem.
