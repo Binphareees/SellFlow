@@ -23,6 +23,7 @@
     "test:pwa": "node scripts/verify-pwa.mjs",
     "validate:register": "node scripts/validate-security-register.mjs",
     "deploy": "bash scripts/deploy.sh",
+    "deploy:staging": "bash scripts/deploy-staging.sh",
     "icons": "node scripts/generate-icons.mjs"
   },
   "prisma": {
