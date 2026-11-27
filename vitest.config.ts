@@ -29,6 +29,7 @@ export default defineConfig({
       "src/app/(app)/dashboard/admin/page.test.ts",
       "src/app/api/health/route.test.ts",
       "src/server/accounts.test.ts",
+      "src/lib/backup-sqlite.test.ts",
     ],
     environment: "node",
     fileParallelism: false,

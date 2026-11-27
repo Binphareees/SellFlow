@@ -24,6 +24,9 @@ prisma/*.db-journal
 *.tsbuildinfo
 next-env.d.ts
 
+# database backups (scripts/backup-sqlite.mjs)
+backups/
+
 # dev scratch / generated artifacts
 .cloud-attachments/
 tmp/

@@ -15,6 +15,7 @@
     "db:reset": "tsx scripts/db-reset.ts",
     "db:studio": "prisma studio",
     "pilot:seed": "tsx scripts/seed-pilot.mjs",
+    "backup:db": "node scripts/backup-sqlite.mjs",
     "verify": "node scripts/verify-api.mjs",
     "verify:csp": "node scripts/verify-csp.mjs",
     "test:e2e": "node scripts/verify-api.mjs",
