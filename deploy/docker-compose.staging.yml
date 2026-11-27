@@ -1,0 +1,53 @@
+# SellFlow staging stack.
+#
+#   docker compose --env-file .env.production \
+#     -f deploy/docker-compose.staging.yml up -d
+#
+# Run that from the checkout root (the `--env-file` flag is what supplies
+# SITE_ADDRESS and TRUSTED_PROXY_SECRET below). The app publishes NO host port:
+# the only way in is through Caddy, which is the trusted proxy the app accepts.
+#
+# Both services read the same .env.production, so the secret Caddy sends and the
+# secret the app expects cannot drift apart.
+
+name: sellflow-staging
+
+services:
+  app:
+    image: sellflow:current
+    env_file:
+      - ../.env.production
+    volumes:
+      # The only writable mount: SQLite, the backup sources and restore target.
+      - /srv/sellflow/data:/app/data
+    expose:
+      - "3000"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      app:
+        # The runner image's HEALTHCHECK probes /api/health, so Caddy starts
+        # only once the database is actually reachable.
+        condition: service_healthy
+    ports:
+      # The only published ports on the host.
+      - "80:80"
+      - "443:443"
+    environment:
+      # SITE_ADDRESS is the public origin; a bare host name enables ACME.
+      # Empty values fail here instead of starting a stack with IP throttling
+      # silently disabled.
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in .env.production}
+      TRUSTED_PROXY_SECRET: ${TRUSTED_PROXY_SECRET:?set TRUSTED_PROXY_SECRET in .env.production}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  # Certificates and ACME account state. Losing them means re-issuing certs.
+  caddy_data:
+  caddy_config:

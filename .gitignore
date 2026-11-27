@@ -16,6 +16,8 @@ prisma/*.db-journal
 .env
 .env.local
 .env*.local
+# filled-in copy of .env.production.example (created on the staging host)
+.env.production
 
 # editor / OS
 .DS_Store

@@ -1,0 +1,24 @@
+# SellFlow staging edge.
+#
+# Caddy is the only container published to the host (80/443). It terminates TLS
+# and is the single trusted proxy hop the app accepts: it replaces every
+# client-supplied forwarding header before the request reaches app:3000.
+#
+#   SITE_ADDRESS=https://staging.sellflow.shop   (certificate via ACME)
+#   SITE_ADDRESS=http://localhost:8080           (local drill, no TLS)
+#
+# header_up with no +/- prefix REPLACES the header (a forged value never
+# survives), and "header_up -X-Real-IP" deletes it outright.
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	reverse_proxy app:3000 {
+		# The app ignores forwarding headers unless this exact secret arrives.
+		# It must equal TRUSTED_PROXY_SECRET in the app's environment.
+		header_up X-Sellflow-Trusted-Proxy {$TRUSTED_PROXY_SECRET}
+		# The address Caddy actually saw. The app reads the rightmost entry.
+		header_up X-Forwarded-For {remote_host}
+		header_up -X-Real-IP
+	}
+}
