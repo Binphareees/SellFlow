@@ -17,6 +17,7 @@
     "pilot:seed": "tsx scripts/seed-pilot.mjs",
     "backup:db": "node scripts/backup-sqlite.mjs",
     "verify:backup": "node scripts/verify-backup.mjs",
+    "admin:grant": "node scripts/manage-privileged.mjs",
     "verify": "node scripts/verify-api.mjs",
     "verify:csp": "node scripts/verify-csp.mjs",
     "test:e2e": "node scripts/verify-api.mjs",

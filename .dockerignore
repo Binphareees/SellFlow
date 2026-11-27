@@ -25,6 +25,9 @@ scripts/*
 !scripts/seed-pilot.mjs
 # The pilot image also runs the backup against the same bind-mounted database.
 !scripts/backup-sqlite.mjs
+# ...and the operator privilege script, which runbook section 11 runs from the
+# pilot image. Without this the documented docker run fails with MODULE_NOT_FOUND.
+!scripts/manage-privileged.mjs
 templates
 *.md
 tsconfig.tsbuildinfo

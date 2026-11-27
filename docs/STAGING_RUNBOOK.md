@@ -400,7 +400,74 @@ current and the new password. There is no operator-set-password route and no
 forced change at first login: a temporary password stays valid until that person
 replaces it, so say so in the same message that carries the sign-in link.
 
-## 11. Nightly backup
+## 11. Grant platform admin or mediator (operator only)
+
+Two privileges exist and neither is self-service: `PLATFORM_ADMIN`
+(`User.isPlatformAdmin`, read by `requirePlatformAdmin`) and `MEDIATOR` (an
+additive `ProfileRole`, read by `isMediator`). Granting either is an operator
+action in a shell on the host. There is no HTTP route, no UI and no API for it,
+and `src/lib/manage-privileged.test.ts` fails if anything under `src/` starts
+naming or importing the script.
+
+The account must already exist — the person registers, then you grant:
+
+```bash
+docker run --rm --env-file /srv/sellflow/app/.env.production \
+  -v /srv/sellflow/data:/app/data \
+  --entrypoint node sellflow:pilot /app/scripts/manage-privileged.mjs \
+  --email person@example.com --mediator
+```
+
+`--env-file` passes the file's values literally, so keep them unquoted (§5).
+`sellflow:pilot` carries this script and the Prisma client; `sellflow:current`
+does not, and `.dockerignore` admits only the scripts the images actually run.
+Rebuild the pilot image after editing the script, or the documented command
+answers `MODULE_NOT_FOUND` (that is exactly what happened before
+`!scripts/manage-privileged.mjs` was added to `.dockerignore`).
+
+From a checkout that has `node_modules` and a database your own user can read —
+a laptop against a copy, not the staging database, which is owned by uid 1001:
+
+```bash
+npm run admin:grant -- --email person@example.com --platform-admin
+npm run admin:grant -- --email person@example.com --platform-admin --revoke
+npm run admin:grant -- --email person@example.com --mediator --revoke
+```
+
+What it guarantees:
+
+- **Refuses anything but a local file database.** `DATABASE_URL` must start with
+  `file:`; a `postgres://` URL is refused before any connection is opened.
+- **Never creates accounts.** An unknown email is refused with exit code 2.
+- **Needs a deliberate confirmation.** It prints the account, the privilege and
+  the live-session count, then requires typing `grant`. `--yes` exists for
+  automation; with no terminal and no `--yes` it refuses.
+- **Is idempotent.** Granting what is already granted (or revoking what is
+  already absent) prints `[no-op]` and writes nothing — no audit row, no session
+  churn.
+- **Audits every real change.** One `AuditLog` row with
+  `actorRole = "operator-script"`, `action = operator.privilege_granted` or
+  `operator.privilege_revoked`, and metadata naming only the privilege and the
+  user id — no email, no hash, no token.
+- **Revokes every live session of the target** in the same transaction as the
+  change and the audit row, so a token issued under the old rights cannot
+  outlive the change. An operator elevating their own account is signed out too.
+- **Prints no secret material** — no password, no hash, no session token.
+
+Exit codes: `0` applied or already in the requested state, `2` refused, `1`
+unexpected failure.
+
+Verified on 2026-11-28 on disposable SQLite databases (§16): the CLI covers
+grant, idempotent repeat, revoke, both privileges, unknown email, non-file URL,
+`--yes`, and the typed confirmation (a wrong word is refused, `grant` applies).
+The `docker run` form above was then run against a throwaway mount: the grant
+revoked the target's two live sessions and wrote one `operator.privilege_granted`
+row, the repeat printed `[no-op]` and wrote nothing, the revoke wrote
+`operator.privilege_revoked`, and an unknown address exited 2.
+
+**UNVERIFIED:** running it against the real staging database.
+
+## 12. Nightly backup
 
 `scripts/backup-sqlite.mjs` copies the database with `VACUUM INTO` (a
 transactionally consistent snapshot, not a byte copy of a live file), then:
@@ -429,7 +496,7 @@ Cron line (installed by the operator, not by this repository):
 15 2 * * * docker run --rm --entrypoint node -v /srv/sellflow/data:/app/data -v /srv/sellflow/backups:/app/backups -e BACKUP_DIR=/app/backups sellflow:pilot /app/scripts/backup-sqlite.mjs >> /var/log/sellflow-backup.log 2>&1
 ```
 
-## 12. Restore a backup
+## 13. Restore a backup
 
 Stop the app first. A restore replaces the file underneath a running server, and
 any `prod.db-wal` / `prod.db-shm` left by the old database would be replayed into
@@ -471,7 +538,7 @@ look corrupt. `rm -f` is harmless when they are not there.
 To inspect a backup without touching production, point a scratch process at a
 copy instead: `DATABASE_URL=file:/tmp/restored.db`.
 
-## 13. Upgrade and roll back
+## 14. Upgrade and roll back
 
 Upgrade — image, then schema, then app:
 
@@ -503,9 +570,9 @@ curl -s -o /dev/null -w '%{http_code}\n' https://staging.sellflow.shop/api/healt
 ```
 
 Migrations are forward-only: a rollback restores the code, not the schema. If the
-bad deploy added a migration, restore the pre-deploy backup from §12 as well.
+bad deploy added a migration, restore the pre-deploy backup from §13 as well.
 
-## 14. Offsite copy — UNVERIFIED
+## 15. Offsite copy — UNVERIFIED
 
 **A backup on the same disk is not a backup.** `/srv/sellflow/backups` lives on
 the same volume as `/srv/sellflow/data`: a disk failure, a ransomware run, or a
@@ -569,7 +636,19 @@ rsync pull and the verifier were exercised against local directories on
 2026-11-28 (drill log at the end of this document), including the case where the
 remote copies vanish and the local ones must survive.
 
-## 15. What the drills proved
+## 16. What the drills proved
+
+**T12 operator grant (2026-11-28)**, two ways, both on disposable SQLite
+databases: the CLI through `npm run admin:grant` (17 tests in
+`src/lib/manage-privileged.test.ts`, including a scan proving nothing under
+`src/` names or imports the script), and the runbook's own
+`docker run --entrypoint node sellflow:pilot /app/scripts/manage-privileged.mjs`
+against a throwaway mount. On the image path: grant printed
+`[changed] MEDIATOR granted` and `sessions : 2 revoked`, the audit table held one
+`operator.privilege_granted` row as `operator-script` and no password or token,
+the repeat printed `[no-op]` with the audit count unchanged, the revoke printed
+`[changed] MEDIATOR revoked`, and an unknown address exited 2 with
+`Refused: No account exists`.
 
 **T11 offsite pull and verification (2026-11-28)**, on the laptop, against a
 disposable SQLite database and local stand-ins for the host:
@@ -648,7 +727,7 @@ quotes removed gave identical values on all three paths.
   (§9). Only the missing-config path was exercised.
 - Cron installation. The backup command was run by hand; the cron line was not
   installed or triggered.
-- The offsite copy in §14: the pull and the verifier ran against local
+- The offsite copy in §15: the pull and the verifier ran against local
   directories only, and no cron or launchd job was installed.
 - `verify:csp` against HTTPS (it was last run on `http://127.0.0.1:3002`).
 - Multi-host or load-balanced deployment: SQLite, one bind mount and one trusted

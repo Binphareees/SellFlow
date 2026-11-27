@@ -32,6 +32,7 @@ export default defineConfig({
       "src/server/accounts.test.ts",
       "src/lib/backup-sqlite.test.ts",
       "src/lib/verify-backup.test.ts",
+      "src/lib/manage-privileged.test.ts",
     ],
     environment: "node",
     fileParallelism: false,
