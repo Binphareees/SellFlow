@@ -23,6 +23,8 @@ prisma/data
 # Host-only tooling and docs (the pilot seeder is needed by the pilot image)
 scripts/*
 !scripts/seed-pilot.mjs
+# The pilot image also runs the backup against the same bind-mounted database.
+!scripts/backup-sqlite.mjs
 templates
 *.md
 tsconfig.tsbuildinfo

@@ -16,13 +16,17 @@
  * Usage:
  *   npm run backup:db
  */
-import { mkdir, readdir, stat, unlink } from "node:fs/promises";
+import { chmod, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { PrismaClient } from "@prisma/client";
 
 const NAME_RE = /^sellflow-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z\.db$/;
 const DAY_MS = 86_400_000;
+
+/** A backup holds every account row: owner-only, and so does its directory. */
+export const BACKUP_FILE_MODE = 0o600;
+export const BACKUP_DIR_MODE = 0o700;
 
 /**
  * Tables whose row counts make a backup meaningfully verifiable. Counts from the
@@ -155,15 +159,60 @@ async function integrityOf(client) {
 }
 
 /**
- * Writes one backup and verifies it. Throws if the target already exists, if
- * the copy fails its integrity check, or if its row counts drift from the live
- * database.
+ * Decides whether a copy is a faithful snapshot of the live database.
+ *
+ * `VACUUM INTO` takes its snapshot somewhere between the two live samples, so
+ * the copy's counts are expected to land in the closed window [before, after]:
+ * anything outside it means rows were lost or invented by the copy. Returns the
+ * list of problems, empty when the copy is trusted.
  */
-export async function runBackup({ now = new Date(), dir = backupDirectory(), retention = retentionDays() } = {}) {
+export function verifyCopy({ before, after, copy, integrity }) {
+  const problems = [];
+  if (integrity !== "ok") problems.push(`integrity_check returned "${integrity}"`);
+
+  for (const table of COUNTED_TABLES) {
+    const copied = copy?.[table];
+    if (typeof copied !== "number" || copied < 0) {
+      problems.push(`${table} is missing from the copy`);
+      continue;
+    }
+
+    const low = before?.[table];
+    const high = after?.[table];
+    // -1 means the table could not be counted on the live database; with no
+    // window to compare against, the integrity check has to carry the verdict.
+    if (typeof low !== "number" || typeof high !== "number" || low < 0 || high < 0) continue;
+
+    const min = Math.min(low, high);
+    const max = Math.max(low, high);
+    if (copied < min || copied > max) {
+      problems.push(`${table} has ${copied} rows in the copy, outside the live window ${min}-${max}`);
+    }
+  }
+
+  return problems;
+}
+
+/**
+ * Writes one backup and verifies it. Throws if the target already exists, or if
+ * the copy fails its integrity check or its row counts fall outside the live
+ * window; in that case the untrusted copy is deleted rather than left behind
+ * looking restorable. `verify` exists so tests can force a failure.
+ */
+export async function runBackup({
+  now = new Date(),
+  dir = backupDirectory(),
+  retention = retentionDays(),
+  verify = verifyCopy,
+} = {}) {
   const source = databaseFile();
   await stat(source); // fail loudly on a wrong path instead of writing an empty backup
 
-  await mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true, mode: BACKUP_DIR_MODE });
+  // mkdir's mode only applies to a directory it creates and is filtered by the
+  // umask, so tighten an existing one as well.
+  await chmod(dir, BACKUP_DIR_MODE);
+
   const name = backupFileName(now);
   const target = path.join(dir, name);
 
@@ -172,32 +221,33 @@ export async function runBackup({ now = new Date(), dir = backupDirectory(), ret
   }
 
   const live = new PrismaClient({ datasourceUrl: sqliteUrl(source) });
-  let liveCounts;
+  let before;
+  let after;
   try {
+    before = await countRows(live);
     await live.$executeRawUnsafe(`VACUUM INTO ${sqlLiteral(target)}`);
-    liveCounts = await countRows(live);
+    after = await countRows(live);
   } finally {
     await live.$disconnect();
   }
 
+  // SQLite creates the copy with the process umask, so tighten it immediately.
+  await chmod(target, BACKUP_FILE_MODE);
+
   const copy = new PrismaClient({ datasourceUrl: sqliteUrl(target) });
   let integrity;
-  let backupCounts;
+  let copyCounts;
   try {
     integrity = await integrityOf(copy);
-    backupCounts = await countRows(copy);
+    copyCounts = await countRows(copy);
   } finally {
     await copy.$disconnect();
   }
 
-  const drifted = Object.keys(liveCounts).filter((table) => liveCounts[table] !== backupCounts[table]);
-  if (integrity !== "ok") throw new Error(`BACKUP_INVALID: integrity_check on ${target} returned "${integrity}".`);
-  if (drifted.length > 0) {
-    throw new Error(
-      `BACKUP_INVALID: row counts differ for ${drifted
-        .map((table) => `${table} (live ${liveCounts[table]}, copy ${backupCounts[table]})`)
-        .join(", ")}`,
-    );
+  const problems = verify({ before, after, copy: copyCounts, integrity });
+  if (problems.length > 0) {
+    await unlink(target).catch(() => {});
+    throw new Error(`BACKUP_INVALID: ${problems.join("; ")}. Removed ${target}.`);
   }
 
   const pruned = await pruneBackups(dir, retention, now, [name]);
@@ -207,7 +257,9 @@ export async function runBackup({ now = new Date(), dir = backupDirectory(), ret
     name,
     source,
     integrity,
-    counts: backupCounts,
+    counts: copyCounts,
+    before,
+    after,
     pruned,
     retentionDays: retention,
     sizeBytes: (await stat(target)).size,
