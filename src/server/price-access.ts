@@ -30,7 +30,8 @@ export type ResellerTerms = {
   commissionType: string;
   commissionValue: number;
   moq: number;
-  stockQty: number;
+  /** Only populated for supplier-owner and moderation reads. */
+  stockQty?: number;
   paymentTermsDays: number;
   deliveryResponsibility: string;
   advertisingPermission: boolean;
@@ -147,21 +148,29 @@ export async function resolveResellerPrice(input: {
   offerId: string;
   viewer: Viewer | null;
   ipHash?: string | null;
+  /**
+   * Browse surfaces (public listing page and listing API) resolve the price for
+   * every visitor; auditing each anonymous denial would write a row per page
+   * view. They pass false. The dedicated price endpoint keeps the default.
+   */
+  auditDenials?: boolean;
 }): Promise<PriceAccessResult> {
-  const { offerId, viewer, ipHash } = input;
+  const { offerId, viewer, ipHash, auditDenials = true } = input;
 
   const offer = await loadOfferHeader(offerId);
   if (!offer) return { allowed: false, reason: "NOT_FOUND" };
 
   const deny = async (reason: PriceDenyReason): Promise<PriceAccessResult> => {
-    await audit({
-      actorProfileId: viewer?.profileId ?? null,
-      action: AUDIT.PRICE_ACCESS_DENIED,
-      entityType: "ResellerOffer",
-      entityId: offerId,
-      metadata: { reason, listingId: offer.listingId },
-      ipHash: ipHash ?? null,
-    });
+    if (auditDenials) {
+      await audit({
+        actorProfileId: viewer?.profileId ?? null,
+        action: AUDIT.PRICE_ACCESS_DENIED,
+        entityType: "ResellerOffer",
+        entityId: offerId,
+        metadata: { reason, listingId: offer.listingId },
+        ipHash: ipHash ?? null,
+      });
+    }
     return { allowed: false, reason };
   };
 
@@ -285,7 +294,6 @@ export async function resolveResellerPrice(input: {
       commissionType: v.commissionType,
       commissionValue: v.commissionValue,
       moq: v.moq,
-      stockQty: 0,
       paymentTermsDays: v.paymentTermsDays,
       deliveryResponsibility: v.deliveryResponsibility,
       advertisingPermission: v.advertisingPermission,
@@ -534,12 +542,4 @@ export async function getListingCategories(): Promise<string[]> {
     take: 40,
   });
   return rows.map((r) => r.category!).filter(Boolean).sort();
-}
-
-/** Cheap headline for listing cards: is a private offer available at all? */
-export async function getOfferHeadline(offerId: string) {
-  return prisma.resellerOffer.findUnique({
-    where: { id: offerId },
-    select: { id: true, status: true, currentVersion: { select: { minResalePriceKobo: true, moq: true } } },
-  });
 }

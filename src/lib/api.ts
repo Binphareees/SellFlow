@@ -186,22 +186,12 @@ function assertSameOrigin(request: Request): void {
   }
 }
 
-/**
- * Backed up assertion used by tests. In test environments the same-origin
- * policy is not enforced.
- */
-export function skipSameOriginCheck(): void {
-  // no-op for test compatibility
-}
-
 /** Wraps a route handler so thrown ApiErrors become clean JSON responses. */
 export function route<Ctx = unknown>(handler: (request: Request, ctx: Ctx) => Promise<Response>) {
   return async (request: Request, ctx: Ctx): Promise<Response> => {
     try {
       assertSameOrigin(request);
       return await handler(request, ctx);
-
-      void skipSameOriginCheck;
     } catch (error) {
       if (error instanceof ApiError) {
         return NextResponse.json(

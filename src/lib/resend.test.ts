@@ -30,8 +30,8 @@ import {
   sendTemplatedEmail,
   configSummary,
   isConfigValid,
-  FROM,
-  REPLY_TO,
+  senderFrom,
+  senderReplyTo,
   MissingEmailConfigError,
   InvalidEmailConfigError,
   InvalidRecipientError,
@@ -55,14 +55,14 @@ describe("resend email sender", () => {
   });
 
   it("exposes a safe, non-secret config summary", () => {
-    expect(configSummary).toEqual({
+    expect(configSummary()).toEqual({
       fromEmail: "security@sellflow.shop",
       replyToEmail: "support@sellflow.shop",
     });
   });
 
   it("reports that the configuration is valid when all envs are present", () => {
-    expect(isConfigValid).toBe(true);
+    expect(isConfigValid()).toBe(true);
   });
 
   it("sends an email and returns a request id with no secrets", async () => {
@@ -87,8 +87,8 @@ describe("resend email sender", () => {
       template: "body-template",
     });
 
-    expect(FROM).toBe("SellFlow Security <security@sellflow.shop>");
-    expect(REPLY_TO).toBe("support@sellflow.shop");
+    expect(senderFrom()).toBe("SellFlow Security <security@sellflow.shop>");
+    expect(senderReplyTo()).toBe("support@sellflow.shop");
   });
 
   it("uses the default reply-to when the caller omits reply-to", async () => {
@@ -202,7 +202,7 @@ describe("resend email sender", () => {
         to: { email: "user@example.com" },
         subject: "Secret subject",
         template: "body-template",
-        replyTo: { email: REPLY_TO },
+        replyTo: { email: senderReplyTo() },
       }),
     ).rejects.toBeInstanceOf(ResendNetworkError);
   });
@@ -242,7 +242,23 @@ describe("resend email sender", () => {
       templateParameters: { token: "abc" },
     });
 
-    expect(REPLY_TO).toBe("support@sellflow.shop");
+    expect(senderReplyTo()).toBe("support@sellflow.shop");
+  });
+
+  it("fails at send time, not import time, when the sender env is missing", async () => {
+    const saved = process.env.RESEND_FROM_EMAIL;
+    delete process.env.RESEND_FROM_EMAIL;
+    try {
+      await expect(
+        sendEmail({
+          to: { email: "user@example.com" },
+          subject: "Subject",
+          template: "body-template",
+        }),
+      ).rejects.toBeInstanceOf(MissingEmailConfigError);
+    } finally {
+      process.env.RESEND_FROM_EMAIL = saved;
+    }
   });
 
   it("keeps provider error details internal only", () => {

@@ -4,6 +4,7 @@ import { hashIdentifier } from "./identifiers";
 
 const ACCOUNT_SCOPE = "ACCOUNT";
 const IP_SCOPE = "IP";
+const REGISTRATION_IP_SCOPE = "REGISTRATION_IP";
 
 export type ThrottleState = {
   locked: boolean;
@@ -158,6 +159,63 @@ export async function clearLoginFailures(email: string): Promise<void> {
   await prisma.loginThrottle.deleteMany({
     where: { scope: ACCOUNT_SCOPE, key: accountKey(email) },
   });
+}
+
+/**
+ * Registration throttle. Uses the same LoginThrottle table and atomic upsert
+ * as sign-in, with a separate scope so a burst of sign-up attempts from one
+ * source cannot consume or reset sign-in counters.
+ */
+export async function checkRegistrationThrottle(
+  ip: string | null,
+): Promise<ThrottleState> {
+  if (!ip) return stateFromRetryAfter(0);
+  const now = Date.now();
+  const row = await prisma.loginThrottle.findUnique({
+    where: {
+      scope_key: { scope: REGISTRATION_IP_SCOPE, key: ipKey(ip) },
+    },
+    select: { lockedUntil: true },
+  });
+  if (row?.lockedUntil && row.lockedUntil.getTime() > now) {
+    return stateFromRetryAfter(Math.ceil((row.lockedUntil.getTime() - now) / 1000));
+  }
+  return stateFromRetryAfter(0);
+}
+
+export async function recordRegistrationAttempt(
+  ip: string | null,
+): Promise<ThrottleState> {
+  if (!ip) return stateFromRetryAfter(0);
+  const now = new Date();
+  const config = throttleConfig();
+  const windowStart = new Date(now.getTime() - config.windowMs);
+  const lockUntil = new Date(now.getTime() + config.lockMs);
+  // Sign-ups legitimately cluster on shared mobile and market networks, so the
+  // default is far higher than the per-account sign-in limit.
+  const limit = positiveInt(process.env.MAX_REGISTRATION_IP_ATTEMPTS, 30);
+
+  const row = await withSqliteRetry(() =>
+    upsertFailure(
+      { scope: REGISTRATION_IP_SCOPE, key: ipKey(ip), limit },
+      now,
+      windowStart,
+      lockUntil,
+    ),
+  );
+
+  try {
+    await pruneThrottle(now, config);
+  } catch (error) {
+    console.error("[auth] registration throttle cleanup failed", error);
+  }
+
+  if (row?.lockedUntil && row.lockedUntil.getTime() > now.getTime()) {
+    return stateFromRetryAfter(
+      Math.ceil((row.lockedUntil.getTime() - now.getTime()) / 1000),
+    );
+  }
+  return stateFromRetryAfter(0);
 }
 
 async function upsertFailure(

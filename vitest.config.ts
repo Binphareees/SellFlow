@@ -2,6 +2,9 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // tsconfig uses Next's `jsx: preserve`; Vitest must still compile page/component
+  // TSX that a test imports.
+  oxc: { jsx: { runtime: "automatic" } },
   resolve: {
     alias: {
       "@": new URL("./src", import.meta.url).pathname,
@@ -20,6 +23,10 @@ export default defineConfig({
       "src/lib/auth/login-throttle.test.ts",
       "src/lib/csrf-origin.test.ts",
       "src/lib/subscription-v1-scope.test.ts",
+      "src/server/price-access-audit.test.ts",
+      "src/lib/security-headers.test.ts",
+      "src/lib/auth/register-throttle.test.ts",
+      "src/app/(app)/dashboard/admin/page.test.ts",
     ],
     environment: "node",
     fileParallelism: false,

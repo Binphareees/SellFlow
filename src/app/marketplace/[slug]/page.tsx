@@ -33,6 +33,7 @@ export default async function ListingDetailPage({ params }: { params: Promise<{ 
               isPlatformAdmin: ctx.user.isPlatformAdmin,
             }
           : null,
+        auditDenials: false,
       })
     : null;
 

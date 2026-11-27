@@ -99,11 +99,31 @@ export class ResendNetworkError extends Error {
   }
 }
 
-// ------- config constants (validated once at module load) -------
+// ------- sender configuration (resolved on use, never at import) -------
+//
+// Nothing in this module reads RESEND_* at module load. A production build
+// ("Collecting page data") imports this file through the password-reset route,
+// and a build image is not the place for email secrets. The first actual send
+// resolves the configuration and throws MissingEmailConfigError if it is absent.
 
-export const FROM = requireEnv("RESEND_FROM_EMAIL");
-export const REPLY_TO = requireEnv("RESEND_REPLY_TO");
-export const API_KEY = requireEnv("RESEND_API_KEY");
+/** Sender address, e.g. `SellFlow Security <security@sellflow.shop>`. */
+export function senderFrom(): string {
+  const value = requireEnv("RESEND_FROM_EMAIL");
+  validateFrom(value);
+  return value;
+}
+
+/** Default Reply-To value; a comma-separated list is allowed. */
+export function senderReplyTo(): string {
+  const value = requireEnv("RESEND_REPLY_TO");
+  validateReplyTo(value);
+  return value;
+}
+
+/** Provider API key, read only when a client is first needed. */
+export function senderApiKey(): string {
+  return requireEnv("RESEND_API_KEY");
+}
 
 const RESEND_BASE_URL =
   typeof process !== "undefined" && process.env
@@ -142,16 +162,19 @@ function validateReplyTo(value: string): void {
   }
 }
 
-validateFrom(FROM);
-validateReplyTo(REPLY_TO);
-
-// The SDK is initialised once. If the key is later invalid, individual sends
-// will fail and be surfaced through sendEmail/sendTemplatedEmail.
+// The SDK is initialised on the first send and reused by the process. If the
+// key is later invalid, individual sends fail and are surfaced through
+// sendEmail/sendTemplatedEmail.
 //
 // Test-only override: when set, only the disposable test server process should
 // point this at a local loopback capture server. Real credentials and external
 // endpoints are never used by S-09 verification.
-const resend = new Resend(API_KEY, { baseUrl: RESEND_BASE_URL });
+let resendClient: Resend | null = null;
+
+function resend(): Resend {
+  resendClient ??= new Resend(senderApiKey(), { baseUrl: RESEND_BASE_URL });
+  return resendClient;
+}
 
 // Export only read-only config primitives; the SDK client instance is used
 // internally by sendEmail/sendTemplatedEmail.
@@ -166,7 +189,7 @@ interface ResendSendResponse {
 }
 
 const sendEmailFn = (options: unknown) =>
-  resend.emails.send(options as Parameters<typeof resend.emails.send>[0]) as Promise<ResendSendResponse>;
+  resend().emails.send(options as Parameters<Resend["emails"]["send"]>[0]) as Promise<ResendSendResponse>;
 
 // ------- payloads -------
 
@@ -282,7 +305,7 @@ function toResendOptionsForSend(options: SendEmailOptions): ResendOptions {
   const replyTo =
     options.replyTo != null
       ? normalizeRecipients(options.replyTo).map((r) => r.email)
-      : REPLY_TO.split(",").map((s) => s.trim()).filter(Boolean);
+      : senderReplyTo().split(",").map((s) => s.trim()).filter(Boolean);
 
   const recipients = normalizeRecipients(options.to).map((r) => r.email);
 
@@ -292,7 +315,7 @@ function toResendOptionsForSend(options: SendEmailOptions): ResendOptions {
       : "";
 
   return {
-    from: FROM,
+    from: senderFrom(),
     subject: options.subject,
     html: "",
     to: recipients.length === 1 ? recipients[0] : recipients,
@@ -311,7 +334,7 @@ function toResendOptionsForTemplate(
   const replyTo =
     options.replyTo != null
       ? normalizeRecipients(options.replyTo).map((r) => r.email)
-      : REPLY_TO.split(",").map((s) => s.trim()).filter(Boolean);
+      : senderReplyTo().split(",").map((s) => s.trim()).filter(Boolean);
 
   const recipients = normalizeRecipients(options.to).map((r) => r.email);
 
@@ -321,7 +344,7 @@ function toResendOptionsForTemplate(
       : "";
 
   return {
-    from: FROM,
+    from: senderFrom(),
     subject: options.subject,
     html: "",
     to: recipients.length === 1 ? recipients[0] : recipients,
@@ -358,23 +381,23 @@ function normalizeOne(input: EmailAddress): EmailAddress {
  * Returns a safe, non-secret summary of the configured sender addresses.
  * Used by tests and diagnostics; never contains the API key.
  */
-export const configSummary = (() => {
-  const fromEmail = FROM.match(VALID_FROM_RE)?.[1]?.trim() ?? "REDACTED";
+export function configSummary(): { fromEmail: string; replyToEmail: string } {
+  const fromEmail = senderFrom().match(VALID_FROM_RE)?.[1]?.trim() ?? "REDACTED";
   return {
     fromEmail,
-    replyToEmail: REPLY_TO.trim(),
+    replyToEmail: senderReplyTo().trim(),
   };
-})();
+}
 
-export const isConfigValid = (() => {
+export function isConfigValid(): boolean {
   try {
-    validateFrom(FROM);
-    validateReplyTo(REPLY_TO);
+    senderFrom();
+    senderReplyTo();
     return true;
   } catch {
     return false;
   }
-})();
+}
 
 // ------- provider error normalization -------
 
