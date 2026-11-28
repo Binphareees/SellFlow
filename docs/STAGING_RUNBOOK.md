@@ -251,7 +251,10 @@ Expect `All migrations have been successfully applied.` and a `prod.db` owned by
 
 `npm run deploy:staging -- --yes` backs the database up (§12) and then runs
 exactly this command, so the migrator never touches a database that has no
-pre-migration copy next to it.
+pre-migration copy next to it. It skips that backup only when the host answers
+"no database file" — the first deploy. "yes" backs up, and an empty answer (the
+ssh call failed) aborts before the migrator runs, because guessing there would
+mean migrating a database nobody can restore.
 
 ## 7. Start the stack
 
@@ -266,8 +269,10 @@ It builds and ships the images (§4), copies the compose file and Caddyfile,
 prints that there is no `prod.db` to back up yet, migrates (§6), recreates the
 app, and then runs the `up -d` below — which is what starts Caddy and obtains
 the certificate. Follow it with the §8 checks. It reloads Caddy only when the
-Caddyfile on the host actually changed; on a first deploy Caddy is started by
-`up -d` with the file already mounted, so there is nothing to reload.
+Caddyfile on the host actually changed, and it skips the reload when the file
+was **absent** before the copy: on a first deploy Caddy is started by `up -d`
+with that file already mounted, so there is nothing to reload and reloading a
+container that has not started yet only produces a spurious failure.
 
 The same thing by hand, from the checkout root: `--env-file` supplies
 `SITE_ADDRESS` and `TRUSTED_PROXY_SECRET` to Caddy, while the app reads the same
@@ -304,9 +309,12 @@ The binary is `/usr/bin/caddy` inside the image and the config is the mount at
 immediately; an invalid file exits 1 and Caddy keeps serving the previous
 config — which is why the deploy script reports a failed reload instead of
 restarting the container, and why the Caddyfile should be checked before it is
-shipped. If reload is ever unavailable on a host (an image with the admin
-endpoint at `localhost:2019` disabled), `restart caddy` re-reads the file at the
-cost of a short outage and without that protection against a broken file.
+shipped. The script retries a failed reload up to **5 times, 3 seconds apart**,
+and only then reports it: a reload issued while Caddy is still starting can fail
+once and succeed on the next attempt. If reload is ever unavailable on a host
+(an image with the admin endpoint at `localhost:2019` disabled), `restart
+caddy` re-reads the file at the cost of a short outage and without that
+protection against a broken file.
 
 ## 8. Verify the deployment
 
@@ -597,9 +605,25 @@ as `sellflow:previous`, ship the image(s), copy the compose file and Caddyfile,
 for up to `HEALTH_TIMEOUT` seconds, print the `[startup]` lines.
 
 `--app-only` is for a change that touched no migration, no backup script and no
-Caddyfile. It refuses unless `sellflow:migrator` and `sellflow:pilot` are already
-on the host — the migrate step and the pre-deploy backup still run, and they need
-those images.
+Caddyfile. Two guards keep it honest:
+
+- It refuses unless `sellflow:migrator` and `sellflow:pilot` are already on the
+  host — the migrate step and the pre-deploy backup still run, and they need
+  those images.
+- It refuses unless the last full deploy is recorded and nothing guarded has
+  changed since. Every successful deploy (full or `--app-only`) writes
+  `git rev-parse HEAD` to `/srv/sellflow/app/.last-deployed-ref` on the host,
+  after the health check passed. `--app-only` reads that file and refuses when it
+  is missing, when the commit is unknown to the laptop's checkout, or when
+  `git diff --name-only <ref> HEAD -- prisma/migrations scripts Dockerfile
+  .dockerignore deploy` prints anything. A missing file usually means the same
+  thing a missing `sellflow:current` tag does: no full deploy has ever succeeded
+  here. The message names the changed paths and says to run a full deploy.
+
+The ref is written only after `/api/health` answered 200, so a deploy that failed
+leaves the previous ref in place and `--app-only` keeps refusing until a full
+deploy succeeds — which is exactly the deploy that can repair the schema, the
+backup script, the images or the Caddyfile.
 
 The same upgrade by hand — image, backup, schema, app, Caddy:
 
@@ -712,6 +736,50 @@ rsync pull and the verifier were exercised against local directories on
 remote copies vanish and the local ones must survive.
 
 ## 16. What the drills proved
+
+**T14 deploy-script safety fixes (2026-11-28)** — the same shimmed rehearsal as
+below (stand-ins for `ssh`, `docker`, `curl`, `gzip`; a throwaway `main` checkout;
+`REMOTE_ROOT` in a temp directory; `SKIP_BUILD=1`, `HEALTH_TIMEOUT=6`), now
+codified as 11 tests in `src/lib/deploy-staging.test.ts`, each building its own
+workspace:
+
+- **First deploy** (Caddyfile `absent`, no `prod.db`): `first deploy: Caddy starts
+  with the Caddyfile already mounted — no reload`, `no database at …/prod.db yet
+  (first deploy) — nothing to back up`, migrator ran, health 200, exit 0, and zero
+  reload commands. `$REMOTE_ROOT/app/.last-deployed-ref` held the deployed
+  commit.
+- **Second deploy, Caddyfile unchanged:** `Caddyfile unchanged on the host
+  (3b2d1fa…)` and `Caddy not reloaded`; the backup's `docker run` is the call
+  immediately before the migrator's, and the script printed the
+  `[backup] wrote …` line before `Applying migrations`.
+- **Caddyfile changed on the host** (drift, `596ca20… -> 3b2d1fa…`): exactly one
+  `caddy reload --config /etc/caddy/Caddyfile`, exit 0.
+- **Reload fails twice, then succeeds:** `Caddy reload attempt 1/2 failed;
+  retrying in 3s`, exit 0, 3 reload calls total.
+- **Reload always fails:** attempts 1–4 each print the retry warning, then
+  `Caddy refused the new Caddyfile and is still serving the previous config.`,
+  exit 1, 5 reload calls total.
+- **`prod.db` check unanswerable** (the ssh call exits 255): `could not determine
+  whether …/prod.db exists (got '<empty>'); aborting before migrating or
+  restarting anything` → exit 1, 0 migrator runs, 0 compose calls.
+- **`docker save` dies mid-stream:** exit 1 after `Streaming the images`, 0
+  migrator runs, 0 compose calls, no `Applying migrations`.
+- **`--app-only` without `app/.last-deployed-ref`:** refused before any build or
+  save (`--app-only requires …/.last-deployed-ref from a previous full deploy`),
+  exit 1.
+- **`--app-only` with a migration committed since the last full deploy:**
+  refused, naming the path (`prisma/migrations/0002_extra.sql`) and telling the
+  operator to run a full deploy, exit 1.
+- **`--app-only` with only an app change since the last full deploy:** the single
+  save line is `save sellflow:current`, no build, and the migrator and the
+  pre-deploy backup still ran; exit 0.
+- Dry run from a clean `main` checkout: exit 0, every command printed, nothing
+  executed. With `--app-only` it also prints `dry run: would verify
+  /srv/sellflow/app/.last-deployed-ref and the diff since it`.
+
+The T13 entry below describes a first deploy that reloaded Caddy. T14 changed
+that on purpose: a reload issued while Caddy is still starting can fail once, so
+an `absent` Caddyfile before the copy now means no reload at all.
 
 **T13 deploy-script fixes (2026-11-28)**, on the laptop, with `ssh`, `docker`
 and `curl` replaced by stand-ins and a throwaway git checkout on `main`
@@ -852,6 +920,13 @@ quotes removed gave identical values on all three paths.
   on a real host.
 - The ssh keepalives over a genuinely slow link, and `--app-only` against a host
   that really carries the migrator and pilot images.
+- The `--app-only` ref guard against a real `app/.last-deployed-ref` written by a
+  real deploy. It was proved against a temp `REMOTE_ROOT` and a throwaway git
+  repository; nothing was compared on the laptop's actual staging checkout.
+- Caddy's reload retry against a real container that is slow to accept a reload.
+  The retry loop was exercised with a failing stand-in; the real reason a reload
+  can succeed on the second attempt (an admin endpoint that is not listening yet)
+  was not reproduced against a live Caddy.
 - `verify:csp` against HTTPS (it was last run on `http://127.0.0.1:3002`).
 - Multi-host or load-balanced deployment: SQLite, one bind mount and one trusted
   proxy hop assume one instance on one host with a local filesystem.

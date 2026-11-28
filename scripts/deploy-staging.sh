@@ -27,6 +27,12 @@
 # no migration, no backup script and no Caddyfile. The migrator and pilot images
 # must already be on the host; the script checks and refuses instead of guessing.
 #
+# It is also gated on the last full deploy: after every successful deploy the
+# script writes `git rev-parse HEAD` to $REMOTE_ROOT/app/.last-deployed-ref on
+# the host, and --app-only reads it back and refuses when it is missing or when
+# `git diff --name-only <ref> HEAD -- prisma/migrations scripts Dockerfile
+# .dockerignore deploy` is non-empty (run a full deploy instead).
+#
 # Before migrating, the deploy backs up $REMOTE_ROOT/data/prod.db with the same
 # command runbook section 12 documents, and stops if that backup fails: a
 # migration is forward-only, so the backup has to exist first. A first deploy (no
@@ -76,7 +82,10 @@ Options:
   --yes, -y    run the commands (without this nothing is executed)
   --dry-run    print the commands only (the default)
   --app-only   build and ship only sellflow:current; refuses unless
-               sellflow:migrator and sellflow:pilot are already on the host
+               sellflow:migrator and sellflow:pilot are already on the host,
+               a full deploy is recorded in app/.last-deployed-ref, and nothing
+               since then changed prisma/migrations, scripts, Dockerfile,
+               .dockerignore or deploy/
   --help, -h   this text
 
 Environment: SSH_TARGET (required), NEXT_PUBLIC_APP_URL, NEXT_PUBLIC_APP_NAME,
@@ -186,6 +195,23 @@ run_remote "test -f $APP_DIR/.env.production || { echo 'missing $APP_DIR/.env.pr
 # The migrator applies the schema and the pilot image takes the pre-deploy
 # backup. Checked before the build, so the refusal costs one round trip.
 if [ "$APP_ONLY" = 1 ]; then
+  if [ "$EXECUTE" = 1 ]; then
+    log "Checking the last full deploy --app-only depends on"
+    last_ref=""
+    remote_capture last_ref "cat $APP_DIR/.last-deployed-ref 2>/dev/null || true"
+    if [ -z "$last_ref" ]; then
+      die "--app-only requires $APP_DIR/.last-deployed-ref from a previous full deploy; run a full deploy first (runbook section 14)"
+    fi
+    if ! changed="$(git diff --name-only "$last_ref" HEAD -- prisma/migrations scripts Dockerfile .dockerignore deploy 2>/dev/null)"; then
+      die "--app-only could not compare $last_ref to HEAD; run a full deploy first (runbook section 14)"
+    fi
+    if [ -n "$changed" ]; then
+      die "--app-only refuses: files changed since the last full deploy ($last_ref): $(printf '%s' "$changed" | tr '\n' ' '); run a full deploy instead (runbook section 14)"
+    fi
+  else
+    note "dry run: would verify $APP_DIR/.last-deployed-ref and the diff since it"
+  fi
+
   log "Checking the images --app-only reuses on the host"
   if ! run_remote "docker image inspect sellflow:migrator sellflow:pilot >/dev/null 2>&1"; then
     die "--app-only ships only sellflow:current: sellflow:migrator and sellflow:pilot must already be on the host (run a full deploy first, runbook section 4)"
@@ -249,6 +275,10 @@ RELOAD_CADDY=0
 if [ "$EXECUTE" != 1 ]; then
   RELOAD_CADDY=1
   note "dry run: would reload Caddy only if the remote Caddyfile checksum changed"
+elif [ "$caddy_sha_before" = "absent" ]; then
+  # A fresh host: `up -d` starts Caddy with this file already mounted, so the
+  # running config is the new one and a reload has nothing to pick up.
+  note "first deploy: Caddy starts with the Caddyfile already mounted — no reload"
 elif [ -n "$caddy_sha_before" ] && [ "$caddy_sha_before" = "$caddy_sha_after" ]; then
   note "deploy/Caddyfile unchanged on the host (${caddy_sha_after}): Caddy keeps its running config"
 else
@@ -264,8 +294,10 @@ fi
 log "Backing up the database before migrating"
 db_present=""
 remote_capture db_present "test -f $REMOTE_ROOT/data/prod.db && echo yes || echo no"
-if [ "$EXECUTE" = 1 ] && [ "$db_present" != "yes" ]; then
+if [ "$EXECUTE" = 1 ] && [ "$db_present" = "no" ]; then
   note "no database at $REMOTE_ROOT/data/prod.db yet (first deploy) — nothing to back up"
+elif [ "$EXECUTE" = 1 ] && [ "$db_present" != "yes" ]; then
+  die "could not determine whether $REMOTE_ROOT/data/prod.db exists (got '${db_present:-<empty>}'); aborting before migrating or restarting anything"
 else
   if ! run_remote "docker run --rm --entrypoint node -v $REMOTE_ROOT/data:/app/data -v $REMOTE_ROOT/backups:/app/backups -e BACKUP_DIR=/app/backups sellflow:pilot /app/scripts/backup-sqlite.mjs"; then
     warn "the pre-deploy backup failed. Nothing was migrated and no container was restarted;"
@@ -312,7 +344,20 @@ fi
 # broken Caddyfile takes the site down instead of leaving it on the old config.
 if [ "$RELOAD_CADDY" = 1 ]; then
   log "Reloading Caddy"
-  if ! run_remote "cd $APP_DIR && ${COMPOSE} exec -T caddy caddy reload --config /etc/caddy/Caddyfile"; then
+  reloaded=0
+  attempt=0
+  while [ "$attempt" -lt 5 ]; do
+    attempt=$((attempt + 1))
+    if run_remote "cd $APP_DIR && ${COMPOSE} exec -T caddy caddy reload --config /etc/caddy/Caddyfile"; then
+      reloaded=1
+      break
+    fi
+    if [ "$attempt" -lt 5 ]; then
+      warn "Caddy reload attempt $attempt failed; retrying in 3s"
+      sleep 3
+    fi
+  done
+  if [ "$reloaded" != 1 ]; then
     warn "Caddy refused the new Caddyfile and is still serving the previous config."
     warn "The app and its database are already on the new version; fix deploy/Caddyfile."
     exit 1
@@ -353,6 +398,12 @@ EOF
 else
   note "would poll until HTTP 200, else print the rollback commands and exit 1"
 fi
+
+# --- 7b. record the deployed ref for --app-only -----------------------------
+# Written only after the health gate passed, so a failed deploy leaves the
+# previous ref in place and --app-only keeps refusing until a full deploy works.
+log "Recording the deployed ref"
+run_remote "mkdir -p $APP_DIR && printf '%s\\n' $(q "$(git rev-parse HEAD)") > $APP_DIR/.last-deployed-ref"
 
 # --- 8. startup warnings -----------------------------------------------------
 log "Startup lines from the new container (empty is good)"
