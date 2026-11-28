@@ -249,11 +249,29 @@ docker run --rm \
 Expect `All migrations have been successfully applied.` and a `prod.db` owned by
 1001 in `/srv/sellflow/data`.
 
+`npm run deploy:staging -- --yes` backs the database up (§12) and then runs
+exactly this command, so the migrator never touches a database that has no
+pre-migration copy next to it.
+
 ## 7. Start the stack
 
-Run from the checkout root: `--env-file` supplies `SITE_ADDRESS` and
-`TRUSTED_PROXY_SECRET` to Caddy, while the app reads the same file through its
-`env_file:` entry.
+**A first deploy is one command**, run from a clean `main` checkout on the
+laptop:
+
+```bash
+npm run deploy:staging -- --yes
+```
+
+It builds and ships the images (§4), copies the compose file and Caddyfile,
+prints that there is no `prod.db` to back up yet, migrates (§6), recreates the
+app, and then runs the `up -d` below — which is what starts Caddy and obtains
+the certificate. Follow it with the §8 checks. It reloads Caddy only when the
+Caddyfile on the host actually changed; on a first deploy Caddy is started by
+`up -d` with the file already mounted, so there is nothing to reload.
+
+The same thing by hand, from the checkout root: `--env-file` supplies
+`SITE_ADDRESS` and `TRUSTED_PROXY_SECRET` to Caddy, while the app reads the same
+file through its `env_file:` entry.
 
 ```bash
 cd /srv/sellflow/app
@@ -263,8 +281,32 @@ docker compose --env-file .env.production \
   -f deploy/docker-compose.staging.yml ps
 ```
 
+`up -d` with no service name starts **both** services. The deploy script
+recreates `app` first (`up -d --force-recreate app`) so the new code is healthy
+before Caddy is touched, then runs this command, which starts Caddy on a first
+deploy and recreates it when the compose file changed.
+
 Caddy waits for the app's `HEALTHCHECK` before starting, so a 502 in the first
 minute is normal and a stack that stays unhealthy is not.
+
+Caddy keeps its running config in memory and the Caddyfile is a read-only mount,
+so a changed file is not seen by Docker and not read by a running Caddy. Reload
+it (verified inside a real `caddy:2` container, v2.11.9):
+
+```bash
+docker compose --env-file .env.production \
+  -f deploy/docker-compose.staging.yml \
+  exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+```
+
+The binary is `/usr/bin/caddy` inside the image and the config is the mount at
+`/etc/caddy/Caddyfile`. `caddy reload` exits 0 and the new directive answers
+immediately; an invalid file exits 1 and Caddy keeps serving the previous
+config — which is why the deploy script reports a failed reload instead of
+restarting the container, and why the Caddyfile should be checked before it is
+shipped. If reload is ever unavailable on a host (an image with the admin
+endpoint at `localhost:2019` disabled), `restart caddy` re-reads the file at the
+cost of a short outage and without that protection against a broken file.
 
 ## 8. Verify the deployment
 
@@ -540,7 +582,26 @@ copy instead: `DATABASE_URL=file:/tmp/restored.db`.
 
 ## 14. Upgrade and roll back
 
-Upgrade — image, then schema, then app:
+**The normal upgrade is the same one command as a first deploy**, from a clean
+`main` checkout on the laptop:
+
+```bash
+npm run deploy:staging -- --yes                 # all three images
+npm run deploy:staging -- --yes --app-only      # only sellflow:current
+```
+
+What it does, in the order that makes a rollback possible: tag the running image
+as `sellflow:previous`, ship the image(s), copy the compose file and Caddyfile,
+**back up `prod.db` and stop if the backup fails**, migrate, recreate `app`,
+`up -d` the whole stack, reload Caddy if its file changed, poll `/api/health`
+for up to `HEALTH_TIMEOUT` seconds, print the `[startup]` lines.
+
+`--app-only` is for a change that touched no migration, no backup script and no
+Caddyfile. It refuses unless `sellflow:migrator` and `sellflow:pilot` are already
+on the host — the migrate step and the pre-deploy backup still run, and they need
+those images.
+
+The same upgrade by hand — image, backup, schema, app, Caddy:
 
 ```bash
 cd /srv/sellflow/app
@@ -551,10 +612,22 @@ docker build \
   --build-arg NEXT_PUBLIC_APP_NAME=SellFlow \
   -t sellflow:current .
 
+# Back up before the migrator runs: migrations are forward-only (§12 sets this
+# command out; the deploy script runs it for you).
+docker run --rm --entrypoint node \
+  -v /srv/sellflow/data:/app/data \
+  -v /srv/sellflow/backups:/app/backups \
+  -e BACKUP_DIR=/app/backups \
+  sellflow:pilot /app/scripts/backup-sqlite.mjs
+
 docker compose --env-file .env.production -f deploy/docker-compose.staging.yml stop app
 docker run --rm -v /srv/sellflow/data:/app/data sellflow:migrator
 docker compose --env-file .env.production -f deploy/docker-compose.staging.yml \
   up -d --force-recreate app
+docker compose --env-file .env.production -f deploy/docker-compose.staging.yml up -d
+docker compose --env-file .env.production -f deploy/docker-compose.staging.yml \
+  exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+
 docker compose --env-file .env.production -f deploy/docker-compose.staging.yml \
   logs --tail 20 app 2>&1 | grep '\[startup\]' || true
 ```
@@ -570,7 +643,9 @@ curl -s -o /dev/null -w '%{http_code}\n' https://staging.sellflow.shop/api/healt
 ```
 
 Migrations are forward-only: a rollback restores the code, not the schema. If the
-bad deploy added a migration, restore the pre-deploy backup from §13 as well.
+bad deploy added a migration, restore the pre-deploy backup from §13 as well —
+`deploy:staging` wrote one immediately before that migration, and printed its
+name.
 
 ## 15. Offsite copy — UNVERIFIED
 
@@ -637,6 +712,46 @@ rsync pull and the verifier were exercised against local directories on
 remote copies vanish and the local ones must survive.
 
 ## 16. What the drills proved
+
+**T13 deploy-script fixes (2026-11-28)**, on the laptop, with `ssh`, `docker`
+and `curl` replaced by stand-ins and a throwaway git checkout on `main`
+(`REMOTE_ROOT` in a temp directory, `SKIP_BUILD=1`, `HEALTH_TIMEOUT=6`):
+
+- **Dry run** printed every command and executed none: 0 ssh calls, 0 docker
+  calls, exit 0.
+- **First deploy** (`--yes`): tagged the running image, streamed and loaded the
+  three images, copied the two files, printed `no database at …/prod.db yet
+  (first deploy) — nothing to back up`, migrated, `up -d --force-recreate app`,
+  `up -d` for the whole stack, reloaded Caddy, health 200, exit 0. The remote
+  Caddyfile was `absent` before the copy, so a reload was due and ran.
+- **Second deploy, Caddyfile unchanged:** `deploy/Caddyfile unchanged on the host
+  (1409842…)` and `Caddy not reloaded`, with zero reload commands in the ssh
+  log. The pre-deploy backup ran (`[backup] wrote …`) and its `docker run` is
+  recorded immediately before the migrator's.
+- **Caddyfile changed on the host** (a line appended): checksums
+  `b5f82eb… -> 1409842…`, `==> Reloading Caddy`, and the reload command appears
+  exactly once.
+- **`--app-only` without the other images on the host:** refused before any
+  build or save (`--app-only ships only sellflow:current…`), exit 1, 0 build
+  calls. With them present: `docker save sellflow:current` only, 0 builds,
+  exit 0.
+- **pipefail:** a `docker save` stand-in that writes 19 bytes and exits 1 → the
+  script exits 1 with 0 `Applying migrations`, 0 pre-deploy backups and 0
+  migrator runs. The remote half was exercised on its own:
+  `printf 'not gzip' | bash -o pipefail -c 'gunzip | docker load'` exits 1 with
+  a `docker load` that would exit 0 on empty input; the same command without
+  `-o pipefail` exits 0.
+- **Backup fails:** `[backup] failed: BACKUP_INVALID…` → exit 1, 0 migrator
+  runs, 0 compose runs.
+- **Health never 200** (503): exit 1 with the rollback block.
+- `caddy reload --config /etc/caddy/Caddyfile` was also run for real inside a
+  `caddy:2` container (v2.11.9, binary `/usr/bin/caddy`): exit 0 and the new
+  directive answered immediately; an invalid Caddyfile exited 1 and the old
+  config kept serving 200.
+- Cover: 8 tests in `src/lib/deploy-staging.test.ts` — bash syntax, `--help` and
+  an unknown flag, keepalives on all four ssh call sites, pipefail on both
+  halves, the §12 backup command ahead of the migrator, whole-stack `up -d`
+  after the app container, the reload path, and `--app-only`.
 
 **T12 operator grant (2026-11-28)**, two ways, both on disposable SQLite
 databases: the CLI through `npm run admin:grant` (17 tests in
@@ -729,6 +844,14 @@ quotes removed gave identical values on all three paths.
   installed or triggered.
 - The offsite copy in §15: the pull and the verifier ran against local
   directories only, and no cron or launchd job was installed.
+- A real `npm run deploy:staging -- --yes` against the staging host. Every T13
+  rehearsal used stand-ins for ssh, docker and curl; the Caddy reload was run in
+  a real container, not against staging's Caddy.
+- The pre-deploy backup against a real `prod.db` on the host: the command is
+  §12's, which was run by hand there, but the deploy script has never taken it
+  on a real host.
+- The ssh keepalives over a genuinely slow link, and `--app-only` against a host
+  that really carries the migrator and pilot images.
 - `verify:csp` against HTTPS (it was last run on `http://127.0.0.1:3002`).
 - Multi-host or load-balanced deployment: SQLite, one bind mount and one trusted
   proxy hop assume one instance on one host with a local filesystem.

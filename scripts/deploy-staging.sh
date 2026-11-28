@@ -23,6 +23,19 @@
 #   ALLOW_DIRTY=1             skip the clean-tree refusal (rehearsals only)
 #   SKIP_BUILD=1              reuse local sellflow:* images (rehearsals only)
 #
+# --app-only ships and restarts just sellflow:current, for a change that touched
+# no migration, no backup script and no Caddyfile. The migrator and pilot images
+# must already be on the host; the script checks and refuses instead of guessing.
+#
+# Before migrating, the deploy backs up $REMOTE_ROOT/data/prod.db with the same
+# command runbook section 12 documents, and stops if that backup fails: a
+# migration is forward-only, so the backup has to exist first. A first deploy (no
+# prod.db yet) prints that and carries on.
+#
+# Every ssh call keeps the connection alive (ServerAliveInterval=30,
+# ServerAliveCountMax=6). ssh's default gives up after 45 silent seconds, which
+# is shorter than streaming and loading the images takes on a slow link.
+#
 # It copies exactly two files — deploy/docker-compose.staging.yml and
 # deploy/Caddyfile — into $REMOTE_ROOT/app/deploy/, and never touches
 # $REMOTE_ROOT/app/.env.production, which belongs to the operator.
@@ -36,6 +49,10 @@ NEXT_PUBLIC_DEFAULT_CURRENCY="${NEXT_PUBLIC_DEFAULT_CURRENCY:-NGN}"
 REMOTE_ROOT="${REMOTE_ROOT:-/srv/sellflow}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
 EXECUTE=0
+APP_ONLY=0
+# One place for the keepalive options: every ssh below uses this array, and the
+# two ssh calls inside pipelines interpolate the same flags as a string.
+SSH_OPTS=(-o ServerAliveInterval=30 -o ServerAliveCountMax=6)
 
 APP_DIR="$REMOTE_ROOT/app"
 DEPLOY_DIR="$APP_DIR/deploy"
@@ -58,6 +75,8 @@ Deploy SellFlow staging from this laptop.
 Options:
   --yes, -y    run the commands (without this nothing is executed)
   --dry-run    print the commands only (the default)
+  --app-only   build and ship only sellflow:current; refuses unless
+               sellflow:migrator and sellflow:pilot are already on the host
   --help, -h   this text
 
 Environment: SSH_TARGET (required), NEXT_PUBLIC_APP_URL, NEXT_PUBLIC_APP_NAME,
@@ -69,6 +88,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --yes|-y) EXECUTE=1 ;;
     --dry-run) EXECUTE=0 ;;
+    --app-only) APP_ONLY=1 ;;
     --help|-h) usage; exit 0 ;;
     *) usage >&2; die "unknown argument: $1" ;;
   esac
@@ -84,17 +104,32 @@ run_local() {
 
 # Prints a shell string and runs it with bash only with --yes. Needed where the
 # step is a pipeline; every interpolated value goes through q().
+# pipefail, not just -e: a pipeline that fails in the middle (a `docker save`
+# that dies after a few bytes) still reports failure, so the script stops
+# instead of loading a truncated stream and migrating on top of it.
 run_shell() {
   printf '  [local] %s\n' "$1"
   [ "$EXECUTE" = 1 ] || return 0
-  bash -c "$1"
+  bash -o pipefail -c "$1"
 }
 
 # Prints a remote command string and runs it over ssh only with --yes.
 run_remote() {
   printf '  [ssh]   %s\n' "$1"
   [ "$EXECUTE" = 1 ] || return 0
-  ssh "$SSH_TARGET" "$1"
+  ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "$1"
+}
+
+# Prints a remote command string and writes its stdout into the named variable.
+# A dry run leaves it empty, so callers read "unknown" as "may have changed".
+remote_capture() {
+  local name="$1" cmd="$2"
+  printf '  [ssh]   %s\n' "$cmd"
+  if [ "$EXECUTE" = 1 ]; then
+    printf -v "$name" '%s' "$(ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "$cmd" 2>/dev/null || true)"
+  else
+    printf -v "$name" '%s' ""
+  fi
 }
 
 # Single-quotes a value for the printed command line. ssh receives it as one
@@ -147,9 +182,25 @@ log "Checking the host layout"
 run_remote "test -d $REMOTE_ROOT/data || { echo 'missing $REMOTE_ROOT/data — create it and chown 1001:1001 (runbook section 1)'; exit 3; }"
 run_remote "test -f $APP_DIR/.env.production || { echo 'missing $APP_DIR/.env.production — create it from .env.production.example (runbook section 5)'; exit 3; }"
 
+# --- 0c. --app-only reuses images this script does not ship ------------------
+# The migrator applies the schema and the pilot image takes the pre-deploy
+# backup. Checked before the build, so the refusal costs one round trip.
+if [ "$APP_ONLY" = 1 ]; then
+  log "Checking the images --app-only reuses on the host"
+  if ! run_remote "docker image inspect sellflow:migrator sellflow:pilot >/dev/null 2>&1"; then
+    die "--app-only ships only sellflow:current: sellflow:migrator and sellflow:pilot must already be on the host (run a full deploy first, runbook section 4)"
+  fi
+fi
+
 # --- 1. build locally --------------------------------------------------------
+if [ "$APP_ONLY" = 1 ]; then
+  IMAGES="sellflow:current"
+else
+  IMAGES="sellflow:current sellflow:migrator sellflow:pilot"
+fi
+
 if [ "${SKIP_BUILD:-0}" = "1" ]; then
-  warn "SKIP_BUILD=1 — reusing the local sellflow:current / :migrator / :pilot"
+  warn "SKIP_BUILD=1 — reusing the local images ($IMAGES)"
 else
   log "Building images"
   run_local docker build \
@@ -157,8 +208,12 @@ else
     --build-arg "NEXT_PUBLIC_APP_NAME=${NEXT_PUBLIC_APP_NAME}" \
     --build-arg "NEXT_PUBLIC_DEFAULT_CURRENCY=${NEXT_PUBLIC_DEFAULT_CURRENCY}" \
     -t sellflow:current .
-  run_local docker build --target migrator -t sellflow:migrator .
-  run_local docker build --target pilot    -t sellflow:pilot .
+  if [ "$APP_ONLY" = 0 ]; then
+    run_local docker build --target migrator -t sellflow:migrator .
+    run_local docker build --target pilot    -t sellflow:pilot .
+  else
+    note "--app-only: not building sellflow:migrator / sellflow:pilot"
+  fi
 fi
 
 # --- 2. tag the old image, then stream the new ones -------------------------
@@ -166,16 +221,63 @@ fi
 # sellflow:current tag, so a rollback target always exists after the first
 # deploy. The archive arrives on stdin: nothing is written to the host's disk.
 log "Streaming the images (docker save | gzip | ssh | docker load)"
-run_shell "docker save sellflow:current sellflow:migrator sellflow:pilot | gzip -1 | ssh $(q "$SSH_TARGET") $(q "if docker image inspect sellflow:current >/dev/null 2>&1; then docker tag sellflow:current sellflow:previous && echo \"[deploy] tagged the running image as sellflow:previous\"; else echo \"[deploy] first deploy: no sellflow:current to tag\"; fi; gunzip | docker load")"
+# The remote half runs under pipefail too: a short or corrupt archive makes
+# `gunzip` fail, and without pipefail `docker load`'s own status would hide it.
+remote_load="if docker image inspect sellflow:current >/dev/null 2>&1; then docker tag sellflow:current sellflow:previous && echo '[deploy] tagged the running image as sellflow:previous'; else echo '[deploy] first deploy: no sellflow:current to tag'; fi; gunzip | docker load"
+# ssh joins its arguments with spaces and hands the result to the remote shell,
+# so the remote command has to be one quoted argument: `bash -o pipefail -c
+# '<script>'`, built by nesting q().
+run_shell "docker save $IMAGES | gzip -1 | ssh ${SSH_OPTS[*]} $(q "$SSH_TARGET") $(q "bash -o pipefail -c $(q "$remote_load")")"
 
 # --- 3. copy the two deployment files, nothing else -------------------------
 # A tar of exactly these two paths: no rsync, no --delete, no other file in the
 # checkout can reach the server this way.
 log "Copying the compose file and Caddyfile"
 run_remote "mkdir -p $DEPLOY_DIR"
-run_shell "tar -C deploy -cf - docker-compose.staging.yml Caddyfile | ssh $(q "$SSH_TARGET") $(q "tar -C $DEPLOY_DIR -xf -")"
+# Caddy keeps its running config in memory and the Caddyfile is a read-only
+# mount, so Docker never recreates the container for a changed file: only a
+# reload picks it up. Checksum before and after the copy decides whether one is
+# needed. `sha256sum`, or `shasum -a 256` on a host that has no coreutils.
+caddy_sha_cmd="if [ -f $DEPLOY_DIR/Caddyfile ]; then { sha256sum $DEPLOY_DIR/Caddyfile 2>/dev/null || shasum -a 256 $DEPLOY_DIR/Caddyfile; } | cut -d' ' -f1; else echo absent; fi"
+caddy_sha_before=""
+remote_capture caddy_sha_before "$caddy_sha_cmd"
+run_shell "tar -C deploy -cf - docker-compose.staging.yml Caddyfile | ssh ${SSH_OPTS[*]} $(q "$SSH_TARGET") $(q "tar -C $DEPLOY_DIR -xf -")"
+caddy_sha_after=""
+remote_capture caddy_sha_after "$caddy_sha_cmd"
 
-# --- 4. migrate --------------------------------------------------------------
+RELOAD_CADDY=0
+if [ "$EXECUTE" != 1 ]; then
+  RELOAD_CADDY=1
+  note "dry run: would reload Caddy only if the remote Caddyfile checksum changed"
+elif [ -n "$caddy_sha_before" ] && [ "$caddy_sha_before" = "$caddy_sha_after" ]; then
+  note "deploy/Caddyfile unchanged on the host (${caddy_sha_after}): Caddy keeps its running config"
+else
+  RELOAD_CADDY=1
+  note "deploy/Caddyfile changed on the host (${caddy_sha_before:-unknown} -> ${caddy_sha_after:-unknown})"
+fi
+
+# --- 4. back up the database before the migration ---------------------------
+# A migration is forward-only: re-pointing the image tag does not undo it. So the
+# database that is about to be migrated is backed up first, with the same command
+# the nightly job uses (runbook section 12). If that fails, stop here — the old
+# code is still serving the old schema and nothing has been touched.
+log "Backing up the database before migrating"
+db_present=""
+remote_capture db_present "test -f $REMOTE_ROOT/data/prod.db && echo yes || echo no"
+if [ "$EXECUTE" = 1 ] && [ "$db_present" != "yes" ]; then
+  note "no database at $REMOTE_ROOT/data/prod.db yet (first deploy) — nothing to back up"
+else
+  if ! run_remote "docker run --rm --entrypoint node -v $REMOTE_ROOT/data:/app/data -v $REMOTE_ROOT/backups:/app/backups -e BACKUP_DIR=/app/backups sellflow:pilot /app/scripts/backup-sqlite.mjs"; then
+    warn "the pre-deploy backup failed. Nothing was migrated and no container was restarted;"
+    warn "the running app is still on the old schema. Fix the backup (runbook section 12) first."
+    exit 1
+  fi
+  if [ "$EXECUTE" = 1 ]; then
+    note 'the pre-deploy backup is the "[backup] wrote …" line above; restore it with runbook section 13'
+  fi
+fi
+
+# --- 5. migrate --------------------------------------------------------------
 # Runs as uid 1001 over the same mount the app uses, before the new code starts.
 log "Applying migrations"
 if ! run_remote "docker run --rm -v $REMOTE_ROOT/data:/app/data sellflow:migrator"; then
@@ -184,7 +286,7 @@ if ! run_remote "docker run --rm -v $REMOTE_ROOT/data:/app/data sellflow:migrato
   exit 1
 fi
 
-# --- 5. recreate the app -----------------------------------------------------
+# --- 6. recreate the app, then bring the whole stack up ----------------------
 log "Recreating the app container"
 if ! run_remote "cd $APP_DIR && ${COMPOSE} up -d --force-recreate app"; then
   warn "compose could not recreate the app. The previous container is still tagged"
@@ -192,7 +294,34 @@ if ! run_remote "cd $APP_DIR && ${COMPOSE} up -d --force-recreate app"; then
   exit 1
 fi
 
-# --- 6. health gate ----------------------------------------------------------
+# `up -d` with no service name starts Caddy on a first deploy and recreates it
+# when the compose file changed. Recreating only `app` leaves a fresh host with
+# nothing listening on 80/443 and an old Caddyfile in a running container.
+log "Bringing the whole stack up (Caddy included)"
+if ! run_remote "cd $APP_DIR && ${COMPOSE} up -d"; then
+  warn "compose could not start the whole stack. The app container is up; check Caddy"
+  warn "and deploy/docker-compose.staging.yml (runbook section 7)."
+  exit 1
+fi
+
+# Caddy reads the mounted Caddyfile on reload without dropping connections.
+# Verified in a real caddy:2 container (v2.11.9): `caddy reload --config
+# /etc/caddy/Caddyfile` exits 0 and the new directive answers immediately, while
+# an invalid file exits 1 and the running config keeps serving. That is why a
+# failed reload is reported rather than followed by a restart: a restart of a
+# broken Caddyfile takes the site down instead of leaving it on the old config.
+if [ "$RELOAD_CADDY" = 1 ]; then
+  log "Reloading Caddy"
+  if ! run_remote "cd $APP_DIR && ${COMPOSE} exec -T caddy caddy reload --config /etc/caddy/Caddyfile"; then
+    warn "Caddy refused the new Caddyfile and is still serving the previous config."
+    warn "The app and its database are already on the new version; fix deploy/Caddyfile."
+    exit 1
+  fi
+else
+  note "Caddy not reloaded (its Caddyfile did not change)"
+fi
+
+# --- 7. health gate ----------------------------------------------------------
 log "Waiting for ${HEALTH_URL} (timeout ${HEALTH_TIMEOUT}s)"
 if [ "$EXECUTE" = 1 ]; then
   waited=0
@@ -225,7 +354,7 @@ else
   note "would poll until HTTP 200, else print the rollback commands and exit 1"
 fi
 
-# --- 7. startup warnings -----------------------------------------------------
+# --- 8. startup warnings -----------------------------------------------------
 log "Startup lines from the new container (empty is good)"
 run_remote "cd $APP_DIR && ${COMPOSE} logs --tail 50 app 2>&1 | grep '\\[startup\\]' || true"
 
